@@ -38,3 +38,7 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.bak
+
+# Local project planning documents
+plan-v2.md
+phase1-guide-celery.md
