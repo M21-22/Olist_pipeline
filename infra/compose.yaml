@@ -1,0 +1,285 @@
+name: olist-platform
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:3.3.2-python3.12
+  restart: unless-stopped
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?Set AIRFLOW_FERNET_KEY}
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.api_fastapi.auth.managers.simple.simple_auth_manager.SimpleAuthManager
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: "admin:admin"
+    AIRFLOW__SIMPLE_AUTH_MANAGER__PASSWORDS_FILE: /opt/airflow/simple_auth_manager_passwords.json.generated
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow_user:${AIRFLOW_DB_PASSWORD:?Set AIRFLOW_DB_PASSWORD}@warehouse-db:5432/airflow
+    AIRFLOW__CELERY__BROKER_URL: redis://:${VALKEY_PASSWORD:?Set VALKEY_PASSWORD}@valkey:6379/0
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow_user:${AIRFLOW_DB_PASSWORD}@warehouse-db:5432/airflow
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?Set AIRFLOW_JWT_SECRET}
+    AIRFLOW__API__BASE_URL: http://airflow-api-server:8080
+    AIRFLOW__LOGGING__REMOTE_LOGGING: "false"
+
+  volumes:
+    - ../airflow/dags:/opt/airflow/dags
+    - ../airflow/plugins:/opt/airflow/plugins
+    - airflow_logs:/opt/airflow/logs
+    - airflow_config:/opt/airflow/config
+
+  networks:
+    - data-net
+    - app-net
+
+  depends_on:
+    warehouse-db:
+      condition: service_healthy
+    valkey:
+      condition: service_healthy
+
+services:
+
+  airflow-worker-general-1:
+    <<: *airflow-common
+    command: celery worker --queues default,ingest
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__CELERY__WORKER_CONCURRENCY: "4"
+      AIRFLOW__CELERY__DEFAULT_QUEUE: default
+    depends_on:
+      warehouse-db:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-worker-general-2:
+    <<: *airflow-common
+    command: celery worker --queues default,ingest
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__CELERY__WORKER_CONCURRENCY: "4"
+      AIRFLOW__CELERY__DEFAULT_QUEUE: default
+    depends_on:
+      warehouse-db:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-worker-batch:
+    <<: *airflow-common
+    command: celery worker --queues batch
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__CELERY__WORKER_CONCURRENCY: "2"
+      AIRFLOW__CELERY__DEFAULT_QUEUE: default
+    depends_on:
+      warehouse-db:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      warehouse-db:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    depends_on:
+      warehouse-db:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-api-server:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - --fail
+        - http://localhost:8080/api/v2/monitor/health
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      warehouse-db:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-init:
+    <<: *airflow-common
+    restart: "no"
+    command:
+      - bash
+      - -c
+      - |
+        set -e
+
+        echo "Checking Airflow version..."
+        airflow version
+
+        echo "Checking CeleryExecutor..."
+        python -c "from airflow.providers.celery.executors.celery_executor import CeleryExecutor; print('CeleryExecutor available')"
+
+        echo "Checking PostgreSQL driver..."
+        python -c "import psycopg2; print('psycopg2 available')"
+
+        echo "Initializing Airflow metadata database..."
+        airflow db migrate
+
+        echo "Checking database connectivity..."
+        airflow db check
+
+        echo "Airflow initialization completed."
+
+  source-db:
+    image: postgres:17.11-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: source
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${SOURCE_POSTGRES_PASSWORD:?Set SOURCE_POSTGRES_PASSWORD}
+    volumes:
+      - source_pgdata:/var/lib/postgresql/data
+      - ./postgres/source-init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - data-net
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U postgres -d source
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  warehouse-db:
+    image: postgres:17.11-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: warehouse
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${WAREHOUSE_POSTGRES_PASSWORD:?Set WAREHOUSE_POSTGRES_PASSWORD}
+    command:
+      - postgres
+      - -c
+      - max_connections=150
+    volumes:
+      - warehouse_pgdata:/var/lib/postgresql/data
+      - ./postgres/warehouse-init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - data-net
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U postgres -d warehouse
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  minio:
+    image: pgsty/silo:RELEASE.2026-10-26T00-00-00Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD}
+    volumes:
+      - object_store_data:/data
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    networks:
+      - data-net
+      - app-net
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://localhost:9000/minio/health/live
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  valkey:
+    image: valkey/valkey:8.1.11-alpine
+    restart: unless-stopped
+    environment:
+      VALKEY_PASSWORD: ${VALKEY_PASSWORD:?Set VALKEY_PASSWORD}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        exec valkey-server \
+          --requirepass "$$VALKEY_PASSWORD" \
+          --appendonly yes \
+          --appendfsync everysec \
+          --maxmemory-policy noeviction
+    volumes:
+      - valkey_data:/data
+    networks:
+      - data-net
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - valkey-cli -a "$$VALKEY_PASSWORD" --no-auth-warning ping | grep -qx PONG
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+networks:
+  data-net:
+    internal: true
+  app-net:
+
+volumes:
+  source_pgdata:
+  warehouse_pgdata:
+  valkey_data:
+  object_store_data:
+  airflow_logs:
+  airflow_config:
