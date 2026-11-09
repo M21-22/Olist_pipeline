@@ -2,7 +2,7 @@
 
 A locally deployed, containerized data engineering platform built incrementally around the Olist retail dataset. The intended end state is a micro-batch ELT pipeline with ingestion, object storage, a PostgreSQL warehouse, dbt transformations, data-quality gates, an API, and monitoring.
 
-> **Current milestone:** Phase 0 repository foundations and the core of Phase 1 infrastructure have been implemented. The Airflow/Celery smoke DAG completed successfully. This is **not yet** an operational retail ingestion or analytics pipeline.
+> **Current milestone:** Phase 2 source PostgreSQL emulator implemented and tested on a one-week Olist slice. Seeding, 3,502-event backfill, row-count/defect verification, repeatability, and stop/resume equivalence passed. Phase 3 incremental extraction has **not** started. This is not yet an end-to-end ingestion or analytics pipeline.
 
 ## Architecture — implemented components
 
@@ -23,8 +23,11 @@ A locally deployed, containerized data engineering platform built incrementally 
     default + ingest     batch queue
     concurrency 4 each   concurrency 2
 
-Source PostgreSQL              Warehouse PostgreSQL
-(source database)              (warehouse + separate airflow database)
+Python Olist emulator ──► Source PostgreSQL (`source.shop`)
+  (seed, replay, defects)      └─ `source.chaos` (ground-truth defect log)
+
+Warehouse PostgreSQL (`warehouse` + separate `airflow` database)
+  Phase 3 next: source PostgreSQL ──► Airflow extraction ──► Silo `landing/`
 
 Silo S3-compatible storage (:9000; console :9001)
   landing / quarantine / backups
@@ -44,7 +47,8 @@ All services are orchestrated with Docker Compose. `data-net` is an internal Doc
 | Airflow | `apache/airflow:3.3.2-python3.12` | API server, scheduler and DAG processor healthy |
 | CeleryExecutor | Two general workers + one batch worker | Three-queue smoke DAG passed |
 | Triggerer | — | Not deployed; not needed for current DAGs |
-| Olist emulator, extraction, dbt, quality gates, API, dashboards | Planned | Not implemented in current milestone |
+| Olist source emulator | Python 3.12, psycopg, pandas, NumPy; Compose `emulator` profile | Implemented; one-week replay and deterministic restart tests passed |
+| Extraction, dbt, quality gates, API, dashboards | Planned | Not yet implemented |
 
 The infrastructure was configured interactively; not every acceptance test from the original plan has been completed. In particular, a clean-volume rebuild, comprehensive database role isolation, S3 read/delete-denial tests, and deployment automation should not be treated as verified solely from the smoke DAG.
 
@@ -59,7 +63,10 @@ The infrastructure was configured interactively; not every acceptance test from 
 ├── docs/
 │   ├── adr/
 │   ├── defect-catalog.md
-│   └── phase1-implementation-guide.md
+│   ├── phase1-implementation-guide.md
+│   ├── phase2-implementation-guide.md
+│   ├── phase3-implementation-guide.md
+│   └── project-state.json
 ├── infra/
 │   ├── compose.yaml
 │   ├── minio/policies/
@@ -67,8 +74,10 @@ The infrastructure was configured interactively; not every acceptance test from 
 │   └── postgres/warehouse-init/
 ├── scripts/
 │   ├── create-db-roles.sh
-│   └── test-s3-access.py
-├── emulator/
+│   ├── test-s3-access.py
+│   └── check-phase2.sh
+├── emulator/                     # Source emulator, SQL, defects config, tests
+├── Makefile                      # Infrastructure and emulator shortcuts
 ├── dbt/
 ├── quality/
 ├── api/
@@ -135,7 +144,7 @@ Phase 0 established Git, `.gitignore`/`.gitattributes`, pre-commit checks (Ruff,
 |---|---|---|
 | 0 | Repository, tooling, ADRs, defect catalog | Substantially completed |
 | 1 | PostgreSQL, object storage, broker, Airflow CeleryExecutor | Core deployment and smoke test completed; reproducibility/remaining acceptance items pending |
-| 2 | Olist source database and emulator | Not started |
+| 2 | Olist source database and emulator | **Completed for one-week integration slice**; full-history acceptance pending |
 | 3 | Incremental extraction to object storage | Not started |
 | 4 | Ingestion quality gates and raw loading | Not started |
 | 5–6 | dbt staging and marts | Not started |
@@ -143,4 +152,45 @@ Phase 0 established Git, `.gitignore`/`.gitattributes`, pre-commit checks (Ruff,
 | 9–10 | Serving API and observability | Not started |
 | 11–12 | Security/backup/DR and CI/CD/documentation | Not started |
 
-For a chronological infrastructure setup guide, see [`docs/phase1-implementation-guide.md`](docs/phase1-implementation-guide.md).
+For chronological implementation notes, see [`docs/phase1-implementation-guide.md`](docs/phase1-implementation-guide.md) and [`docs/phase2-implementation-guide.md`](docs/phase2-implementation-guide.md). The next-phase checklist is [`docs/phase3-implementation-guide.md`](docs/phase3-implementation-guide.md). Verified and pending interface identifiers are recorded in [`docs/project-state.json`](docs/project-state.json).
+
+## Phase 2 — source emulator: tested milestone
+
+The emulator replays historical Olist CSVs as changing operational records in `source.shop`, and records deliberately injected defects in `source.chaos`. Its Docker Compose service is activated with `--profile emulator`. The `Makefile` exposes `emulator-profile`, `emulator-migrate`, `emulator-seed`, `emulator-backfill`, `emulator-status`, `emulator-verify`, `emulator-fingerprint`, and `check2`.
+
+**Integration evidence (2017-03-01 to 2017-03-08):**
+
+| Check | Observed result |
+|---|---|
+| Event plan and replay | 3,502 / 3,502 events; 586 selected orders |
+| `shop.orders` | 586 rows |
+| `shop.order_items` | 650 rows |
+| `shop.order_payments` | 618 rows |
+| `shop.order_reviews` | 585 rows |
+| Static/master tables | 32,951 products; 3,095 sellers; 1,000,163 geolocation rows; 71 translations |
+| Row-count and defect-rate verification | All checks passed; `RESULT: OK` |
+| Repeatability | Identical table fingerprints after reset and replay |
+| Restart recovery | `check2` passed: 400 events + resume matched uninterrupted replay |
+
+**Scope:** This proves the small-window emulator integration, not full-history replay, real-time soak, Phase 3 extraction, or detection by downstream quality gates. Fingerprints cover only the columns/tables included by `verify.py`.
+
+To rerun the **destructive** local smoke test (resets emulator source data):
+
+```bash
+make check2
+```
+
+To inspect a seeded source without resetting it:
+
+```bash
+make emulator-status
+make emulator-verify
+```
+
+## Phase 3 — next milestone
+
+Implement per-table incremental extraction from `source.shop` to the versioned S3-compatible `landing` bucket using an Airflow `ingest` DAG (15-minute schedule, Celery `ingest` queue, dynamic task mapping). Each landed batch has deterministic identity, Parquet data, a manifest written last, and a durable watermark; worker identity and task outcomes are audited.
+
+**Before implementation**, reconcile the source/warehouse role names, the actual Airflow connection configuration, and Silo endpoint/credentials against the checked-in Compose and initialization files. The overall plan uses older role labels in places; the Phase 2 working configuration uses `emulator_writer` and `source_reader`. Do not silently rename working roles.
+
+The Phase 3 plan and acceptance checklist are in `docs/phase3-implementation-guide.md`.
