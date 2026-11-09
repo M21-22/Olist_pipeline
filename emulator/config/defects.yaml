@@ -1,0 +1,25 @@
+seed: 42
+enabled: true
+
+rates:
+  negative_price: 0.002
+  negative_freight: 0.001
+  duplicate_item: 0.002
+  review_score_out_of_range: 0.002
+  future_timestamp: 0.001
+  delivered_before_purchase: 0.001
+  null_required_field: 0.001
+  invalid_state_code: 0.002
+  unknown_order_status: 0.0005
+  text_noise: 0.01
+  silent_update: 0.003
+  backdated_update: 0.003
+  hard_delete_review: 0.002
+  hard_delete_order: 0.0005
+  late_commit_tx: 0.02
+
+params:
+  lazy_master_fraction: 0.05
+  lazy_delay_days: [2, 10]
+  backdate_hours: [2, 6]
+  late_commit_seconds: 30
