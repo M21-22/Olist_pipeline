@@ -1,14 +1,14 @@
 """Deterministic randomness and value-level defect injection."""
 
 from __future__ import annotations
-
 import hashlib
-
 from .settings import DefectConfig
+from datetime import datetime, timezone
 
 BAD_STATES = ["XX", "ZZ", "00", "S P"]
 BAD_STATUSES = ["teleported", "lost", "??"]
 BAD_SCORES = ["0", "6", "9", "-1"]
+FAR_FUTURE = datetime(2099, 1, 1, tzinfo=timezone.utc)
 
 
 def u01(seed: int, salt: str, key: str) -> float:

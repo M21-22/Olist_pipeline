@@ -270,6 +270,43 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  emulator:
+    profiles: ["emulator"]
+    build:
+      context: ../emulator
+    image: olist-emulator:local
+    restart: on-failure
+    command: ["run"]
+    environment:
+      DB_HOST: source-db
+      DB_NAME: source
+      DB_USER: emulator_writer
+      DB_PASSWORD: ${EMULATOR_WRITER_PASSWORD:?}
+      DATA_DIR: /data
+      SEED: ${EMULATOR_SEED:-}
+      SIM_SPEED: ${SIM_SPEED:-1440}
+      TICK_SECONDS: ${TICK_SECONDS:-5}
+      SIM_FROM: ${SIM_FROM:-}
+      SIM_TO: ${SIM_TO:-}
+    volumes:
+      - ../data/olist:/data:ro
+    networks: [data-net]
+    depends_on:
+      source-db:
+        condition: service_healthy
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
 
 networks:
   data-net:
