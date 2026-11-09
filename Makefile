@@ -61,3 +61,8 @@ emulator-reset:
 	else \
 		echo "Cancelled"; \
 	fi
+
+.PHONY: check2
+
+check2:
+	bash scripts/check-phase2.sh
