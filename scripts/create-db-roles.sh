@@ -46,6 +46,7 @@ create_role source-db emulator_writer "$EMULATOR_WRITER_PASSWORD"
 create_role source-db source_reader "$SOURCE_READER_PASSWORD"
 
 create_role warehouse-db etl_loader "$ETL_LOADER_PASSWORD"
+create_role warehouse-db ingest_audit_writer "$INGEST_AUDIT_WRITER_PASSWORD"
 create_role warehouse-db dbt_runner "$DBT_RUNNER_PASSWORD"
 create_role warehouse-db soda_reader "$SODA_READER_PASSWORD"
 create_role warehouse-db api_reader "$API_READER_PASSWORD"
