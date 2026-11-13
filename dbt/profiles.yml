@@ -1,0 +1,12 @@
+olist:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('DBT_HOST', 'warehouse-db') }}"
+      port: 5432
+      dbname: warehouse
+      user: dbt_runner
+      password: "{{ env_var('DBT_RUNNER_PASSWORD') }}"
+      schema: staging
+      threads: 2
