@@ -1,0 +1,23 @@
+version: 2
+
+sources:
+  - name: raw
+    database: warehouse
+    schema: raw
+    tables:
+      - name: customers
+      - name: orders
+      - name: order_items
+      - name: order_payments
+      - name: order_reviews
+      - name: products
+      - name: sellers
+      - name: geolocation
+      - name: product_category_translation
+  - name: audit
+    database: warehouse
+    schema: audit
+    tables:
+      - name: batch_registry
+      - name: landed_batches
+      - name: deleted_keys
