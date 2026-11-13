@@ -1,0 +1,33 @@
+name: olist
+version: '1.0.0'
+config-version: 2
+profile: olist
+model-paths: [models]
+snapshot-paths: [snapshots]
+macro-paths: [macros]
+
+models:
+  olist:
+    staging:
+      +schema: staging
+      +materialized: incremental
+      +incremental_strategy: delete+insert
+      +grants:
+        select: [soda_reader]
+    marts:
+      +schema: marts
+      +materialized: table
+      +grants:
+        select: [soda_reader, grafana_reader]
+      # For individual models, indexes are declared in config() or properties YAML.
+    api:
+      +schema: api
+      +materialized: view
+      +grants:
+        select: [api_reader, grafana_reader]
+
+snapshots:
+  olist:
+    +schema: snapshots
+    +grants:
+      select: [soda_reader]
