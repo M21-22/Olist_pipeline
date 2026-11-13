@@ -2,7 +2,7 @@
 
 A locally deployed, containerized data engineering platform built incrementally around the Olist retail dataset. The intended end state is a micro-batch ELT pipeline with ingestion, object storage, a PostgreSQL warehouse, dbt transformations, data-quality gates, an API, and monitoring.
 
-> **Current milestone:** Phase 2 source PostgreSQL emulator implemented and tested on a one-week Olist slice. Seeding, 3,502-event backfill, row-count/defect verification, repeatability, and stop/resume equivalence passed. Phase 3 incremental extraction has **not** started. This is not yet an end-to-end ingestion or analytics pipeline.
+> **Current milestone:** The incremental ingestion workflow through Gate 2 has been tested: source extraction, Parquet and manifest publication to S3 landing, Gate 1 validation and audit reporting, PostgreSQL `COPY` to raw tables, Gate 2 reconciliation, batch certification, watermark advancement, idempotent replay, and failure handling. **Next:** implement Gate 1 quarantine handling (copy failed artifacts, record reasons, mark batches `QUARANTINED`). Automated repair, tombstones, downstream quality gates, and production-ready analytics remain pending.
 
 ## Architecture — implemented components
 
@@ -25,12 +25,25 @@ A locally deployed, containerized data engineering platform built incrementally 
 
 Python Olist emulator ──► Source PostgreSQL (`source.shop`)
   (seed, replay, defects)      └─ `source.chaos` (ground-truth defect log)
+            |
+            v
+  Airflow incremental extraction (`ingest` queue)
+            |
+            v
+  Silo S3-compatible `landing/` (Parquet + manifest)
+            |
+            v
+  Gate 1: landing validation + audit reporting
+            | (valid batch)
+            v
+  PostgreSQL `COPY` ──► warehouse `raw` tables
+            |
+            v
+  Gate 2: reconciliation ──► certification + watermark advancement
 
-Warehouse PostgreSQL (`warehouse` + separate `airflow` database)
-  Phase 3 next: source PostgreSQL ──► Airflow extraction ──► Silo `landing/`
-
-Silo S3-compatible storage (:9000; console :9001)
-  landing / quarantine / backups
+Warehouse PostgreSQL also hosts the separate `airflow` metadata database.
+Silo endpoint :9000; console :9001; buckets: landing / quarantine / backups.
+Quarantine bucket exists, but Gate 1 quarantine publication is pending.
 ```
 
 All services are orchestrated with Docker Compose. `data-net` is an internal Docker network; `app-net` is used for components that need external connectivity. Database and broker ports are not published to the host. The Airflow UI and Silo ports are bound to `127.0.0.1`.
@@ -48,7 +61,10 @@ All services are orchestrated with Docker Compose. `data-net` is an internal Doc
 | CeleryExecutor | Two general workers + one batch worker | Three-queue smoke DAG passed |
 | Triggerer | — | Not deployed; not needed for current DAGs |
 | Olist source emulator | Python 3.12, psycopg, pandas, NumPy; Compose `emulator` profile | Implemented; one-week replay and deterministic restart tests passed |
-| Extraction, dbt, quality gates, API, dashboards | Planned | Not yet implemented |
+| Incremental extraction and S3 landing | Airflow, Parquet + manifest | Implemented and tested |
+| Gate 1 validation | Landing validation and audit reporting | Implemented and tested; quarantine action pending |
+| Raw loading and Gate 2 | PostgreSQL `COPY`, reconciliation, certification | Implemented and tested |
+| dbt transformations, later quality gates, API, dashboards | Later phases | Not included in validated milestone |
 
 The infrastructure was configured interactively; not every acceptance test from the original plan has been completed. In particular, a clean-volume rebuild, comprehensive database role isolation, S3 read/delete-denial tests, and deployment automation should not be treated as verified solely from the smoke DAG.
 
@@ -57,16 +73,14 @@ The infrastructure was configured interactively; not every acceptance test from 
 ```text
 .
 ├── airflow/
-│   ├── dags/infrastructure_smoke_test.py
+│   ├── dags/                      # Infrastructure smoke and ingestion DAGs
+│   ├── include/                   # Shared extraction / validation / loading code
+│   │   └── gates/                 # Gate 1 and Gate 2 helpers
 │   └── plugins/
 ├── data/
 ├── docs/
 │   ├── adr/
-│   ├── defect-catalog.md
-│   ├── phase1-implementation-guide.md
-│   ├── phase2-implementation-guide.md
-│   ├── phase3-implementation-guide.md
-│   └── project-state.json
+│   └── defect-catalog.md
 ├── infra/
 │   ├── compose.yaml
 │   ├── minio/policies/
@@ -78,7 +92,7 @@ The infrastructure was configured interactively; not every acceptance test from 
 │   └── check-phase2.sh
 ├── emulator/                     # Source emulator, SQL, defects config, tests
 ├── Makefile                      # Infrastructure and emulator shortcuts
-├── dbt/
+├── dbt/                          # Configuration; downstream models not yet validated
 ├── quality/
 ├── api/
 ├── tests/
@@ -86,7 +100,7 @@ The infrastructure was configured interactively; not every acceptance test from 
 └── README.md
 ```
 
-Some directories are placeholders for later phases. The database bootstrap files and scripts listed above reflect the working-session design; confirm they exist and are committed before treating the repository as a reproducible deployment.
+The tree is a high-level guide, not an exhaustive listing of tracked files. Confirm that code and database migrations are committed before claiming reproducibility from a fresh clone.
 
 ## Requirements
 
@@ -136,7 +150,7 @@ Buckets are private. Neither policy grants object deletion. `PutObject` still pe
 
 ## Development practices
 
-Phase 0 established Git, `.gitignore`/`.gitattributes`, pre-commit checks (Ruff, SQLFluff, yamllint, Gitleaks and pre-commit-hooks), architectural decision records and the defect catalog. Keep credentials in ignored `.env` files; commit only templates and non-secret policies.
+Phase 0 established Git, line-ending conventions, architectural decision records, and a defect catalog. The current pre-commit scope covers secret scanning (Gitleaks), LF line-ending normalization, whitespace/end-of-file cleanup, and YAML syntax/style checks. Python and SQL linting are not part of the current pre-commit configuration. Keep credentials in local `.env` files; commit only templates and non-secret policies.
 
 ## Roadmap
 
@@ -144,35 +158,19 @@ Phase 0 established Git, `.gitignore`/`.gitattributes`, pre-commit checks (Ruff,
 |---|---|---|
 | 0 | Repository, tooling, ADRs, defect catalog | Substantially completed |
 | 1 | PostgreSQL, object storage, broker, Airflow CeleryExecutor | Core deployment and smoke test completed; reproducibility/remaining acceptance items pending |
-| 2 | Olist source database and emulator | **Completed for one-week integration slice**; full-history acceptance pending |
-| 3 | Incremental extraction to object storage | Not started |
-| 4 | Ingestion quality gates and raw loading | Not started |
+| 2 | Olist source database and emulator | One-week replay and restart tests reported passed; full-history acceptance pending |
+| 3 | Incremental extraction to object storage | **Implemented and tested** through durable S3 landing |
+| 4 | Ingestion quality gates and raw loading | **Partially implemented and tested:** Gate 1 checks, audit results, raw `COPY`, Gate 2 and certification; quarantine handling next |
 | 5–6 | dbt staging and marts | Not started |
 | 7–8 | Quality, reconciliation, defect injection | Not started |
 | 9–10 | Serving API and observability | Not started |
 | 11–12 | Security/backup/DR and CI/CD/documentation | Not started |
 
-For chronological implementation notes, see [`docs/phase1-implementation-guide.md`](docs/phase1-implementation-guide.md) and [`docs/phase2-implementation-guide.md`](docs/phase2-implementation-guide.md). The next-phase checklist is [`docs/phase3-implementation-guide.md`](docs/phase3-implementation-guide.md). Verified and pending interface identifiers are recorded in [`docs/project-state.json`](docs/project-state.json).
-
 ## Phase 2 — source emulator: tested milestone
 
 The emulator replays historical Olist CSVs as changing operational records in `source.shop`, and records deliberately injected defects in `source.chaos`. Its Docker Compose service is activated with `--profile emulator`. The `Makefile` exposes `emulator-profile`, `emulator-migrate`, `emulator-seed`, `emulator-backfill`, `emulator-status`, `emulator-verify`, `emulator-fingerprint`, and `check2`.
 
-**Integration evidence (2017-03-01 to 2017-03-08):**
-
-| Check | Observed result |
-|---|---|
-| Event plan and replay | 3,502 / 3,502 events; 586 selected orders |
-| `shop.orders` | 586 rows |
-| `shop.order_items` | 650 rows |
-| `shop.order_payments` | 618 rows |
-| `shop.order_reviews` | 585 rows |
-| Static/master tables | 32,951 products; 3,095 sellers; 1,000,163 geolocation rows; 71 translations |
-| Row-count and defect-rate verification | All checks passed; `RESULT: OK` |
-| Repeatability | Identical table fingerprints after reset and replay |
-| Restart recovery | `check2` passed: 400 events + resume matched uninterrupted replay |
-
-**Scope:** This proves the small-window emulator integration, not full-history replay, real-time soak, Phase 3 extraction, or detection by downstream quality gates. Fingerprints cover only the columns/tables included by `verify.py`.
+The emulator replay, repeatability, and restart behavior were tested during Phase 2. Full-history validation remains pending. No row-count or event-count results are published here because the corresponding test output has not been independently verified for this documentation update.
 
 To rerun the **destructive** local smoke test (resets emulator source data):
 
@@ -187,10 +185,30 @@ make emulator-status
 make emulator-verify
 ```
 
-## Phase 3 — next milestone
+## Phases 3–4 — validated ingestion milestone
 
-Implement per-table incremental extraction from `source.shop` to the versioned S3-compatible `landing` bucket using an Airflow `ingest` DAG (15-minute schedule, Celery `ingest` queue, dynamic task mapping). Each landed batch has deterministic identity, Parquet data, a manifest written last, and a durable watermark; worker identity and task outcomes are audited.
+The implemented workflow extracts changes from `source.shop`, publishes Parquet files and manifests to the S3-compatible `landing` bucket, validates batches in Gate 1, loads valid rows into warehouse `raw` tables using PostgreSQL `COPY`, and performs Gate 2 reconciliation before certifying batches and advancing the relevant watermark/checkpoint. Audit records capture validation and batch outcomes.
 
-**Before implementation**, reconcile the source/warehouse role names, the actual Airflow connection configuration, and Silo endpoint/credentials against the checked-in Compose and initialization files. The overall plan uses older role labels in places; the Phase 2 working configuration uses `emulator_writer` and `source_reader`. Do not silently rename working roles.
+**Workflow checks reported as passed:**
 
-The Phase 3 plan and acceptance checklist are in `docs/phase3-implementation-guide.md`.
+| Check | Result |
+|---|---|
+| Extraction and S3 publication | Passed |
+| Gate 1 validation and audit reporting | Passed |
+| Raw load using PostgreSQL `COPY` | Passed |
+| Gate 2 validation | Passed |
+| Batch certification and watermark advancement | Passed |
+| Idempotent replay and failure handling | Passed |
+
+The checks above reflect the project handoff status, not independently attached test logs or full-history acceptance. In particular, a Gate 1 failure is not yet fully handled by copying its artifacts to quarantine and recording the `QUARANTINED` status. The successful-path tests do not establish that quarantine handling is complete.
+
+### Next implementation priority: Gate 1 quarantine handling
+
+For a failed Gate 1 batch:
+
+1. Copy the failed Parquet and manifest artifacts into the `quarantine` bucket without deleting the original landing artifacts.
+2. Persist structured failure reasons in the quarantine location and audit records.
+3. Update the relevant batch status to `QUARANTINED` without advancing the certified checkpoint.
+4. Test the failed-batch path, retries, and idempotent handling of repeated quarantine attempts.
+
+**Deferred:** automatic repair, deletion tombstones, downstream staging/mart quality gates, reconciliation, and broader defect-injection coverage. The current milestone should not be described as a completed end-to-end analytics platform.
