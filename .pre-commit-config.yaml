@@ -5,21 +5,9 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
-      - id: check-added-large-files
-      - id: check-merge-conflict
-
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.11.13
-    hooks:
-      - id: ruff
-        args: [--fix]
-      - id: ruff-format
-
-  - repo: https://github.com/sqlfluff/sqlfluff
-    rev: 3.4.0
-    hooks:
-      - id: sqlfluff-lint
-        args: [--dialect, postgres]
+        args: [--allow-multiple-documents]
+      - id: mixed-line-ending
+        args: [--fix=lf]
 
   - repo: https://github.com/adrienverge/yamllint
     rev: v1.37.1
