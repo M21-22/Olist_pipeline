@@ -1,0 +1,12 @@
+version: 2
+snapshots:
+  - name: customer_history
+    relation: ref('stg_customers')
+    config:
+      schema: snapshots
+      unique_key: customer_id
+      strategy: check
+      check_cols:
+        - customer_zip_code_prefix
+        - customer_city
+        - customer_state
