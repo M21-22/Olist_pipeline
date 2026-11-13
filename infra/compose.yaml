@@ -1,7 +1,10 @@
 name: olist-platform
 
 x-airflow-common: &airflow-common
-  image: apache/airflow:3.3.2-python3.12
+  build:
+    context: ..
+    dockerfile: airflow/Dockerfile
+  image: olist-airflow:3.3.2
   restart: unless-stopped
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
@@ -16,6 +19,11 @@ x-airflow-common: &airflow-common
     AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?Set AIRFLOW_JWT_SECRET}
     AIRFLOW__API__BASE_URL: http://airflow-api-server:8080
     AIRFLOW__LOGGING__REMOTE_LOGGING: "false"
+    AIRFLOW_CONN_OLIST_SOURCE: postgresql://source_reader:${SOURCE_READER_PASSWORD}@source-db:5432/source
+    AIRFLOW_CONN_OLIST_AUDIT: postgresql://ingest_audit_writer:${INGEST_AUDIT_WRITER_PASSWORD}@warehouse-db:5432/warehouse
+    AIRFLOW_CONN_OLIST_S3: '{"conn_type":"aws","login":"${S3_PIPELINE_ACCESS_KEY}","password":"${S3_PIPELINE_SECRET_KEY}","extra":{"endpoint_url":"http://minio:9000","region_name":"us-east-1"}}'
+    AIRFLOW_CONN_OLIST_LOADER: postgresql://etl_loader:${ETL_LOADER_PASSWORD}@warehouse-db:5432/warehouse
+    AIRFLOW_CONN_OLIST_RECONCILE: postgresql://dbt_runner:${DBT_RUNNER_PASSWORD}@warehouse-db:5432/warehouse
 
   volumes:
     - ../airflow/dags:/opt/airflow/dags
