@@ -1,7 +1,24 @@
 name: Regression tests
 on:
   push:
+    paths-ignore:
+      - '**/*.md'
+      - '.gitignore'
+      - '.gitattributes'
+      - '.editorconfig'
+      - '.vscode/**'
+      - 'LICENSE'
+      - 'NOTICE'
+
   pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - '.gitignore'
+      - '.gitattributes'
+      - '.editorconfig'
+      - '.vscode/**'
+      - 'LICENSE'
+      - 'NOTICE'
 jobs:
   regression:
     runs-on: ubuntu-latest
