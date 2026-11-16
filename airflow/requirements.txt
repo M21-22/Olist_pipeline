@@ -1,2 +1,5 @@
 duckdb==2.0.0
 great_expectations==1.24.1
+pandas==3.0.5
+pyarrow==25.0.1
+pytest==8.4.2

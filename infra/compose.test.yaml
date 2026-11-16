@@ -1,0 +1,39 @@
+# Isolated test-only stack: no production warehouse/source volumes or network.
+name: olist-regression-tests
+services:
+  test-db:
+    image: postgres:17.11-bookworm
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ci_postgres_only
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./test-db-init.sh:/docker-entrypoint-initdb.d/01-test-db-init.sh:ro
+      - ./postgres/warehouse-init:/olist-ddl:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d warehouse_gate2_test"]
+      interval: 3s
+      timeout: 3s
+      retries: 25
+  test-runner:
+    build:
+      context: ..
+      dockerfile: airflow/Dockerfile
+    image: olist-airflow:3.3.2
+    depends_on:
+      test-db:
+        condition: service_healthy
+    environment:
+      PYTHONPATH: /opt/airflow
+      PYTEST_ADDOPTS: "-p no:cacheprovider"
+      AIRFLOW_CONN_OLIST_TEST_ADMIN: postgresql://olist_test_admin:ci_admin_only@test-db:5432/warehouse_gate2_test
+      AIRFLOW_CONN_OLIST_TEST_LOADER: postgresql://etl_loader:ci_loader_only@test-db:5432/warehouse_gate2_test
+      OLIST_TEST_ADMIN_CONN_ID: olist_test_admin
+      OLIST_RUN_DB_INTEGRATION: "1"
+    volumes:
+      - ../tests:/opt/airflow/tests:ro
+      - ../airflow/dags:/opt/airflow/dags:ro
+    working_dir: /opt/airflow
+    entrypoint: ["python", "-m", "pytest"]
+    command: ["-v", "-ra", "/opt/airflow/tests"]
