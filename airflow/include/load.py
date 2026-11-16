@@ -18,8 +18,8 @@ from include.common import (
     canonical_json,
     identifier,
 )
-from include.gates.gate1 import validate_landed_batch
-from include.gates.gate2 import validate_loaded_batch
+from include.gates.gate1 import Gate1Failure, validate_landed_batch
+from include.gates.gate2 import Gate2Failure, validate_loaded_batch
 
 LOADER_CONN_ID = "olist_loader"
 
@@ -73,9 +73,17 @@ def _record_gate1(batch_id, table, manifest, checks, failure=None):
             with conn.cursor() as cursor:
                 for result in checks:
                     cursor.execute(
-                        """INSERT INTO audit.dq_results
-                           (batch_id, table_name, gate, check_name, status, failed_count, details)
-                           VALUES (%s, %s, 'GATE_1', %s, %s, %s, %s::jsonb)""",
+                        """
+                        INSERT INTO audit.dq_results
+                        (batch_id, table_name, gate, check_name, status, failed_count, details)
+                        VALUES (%s, %s, 'GATE_1', %s, %s, %s, %s::jsonb)
+                        ON CONFLICT (batch_id, gate, check_name)
+                        DO UPDATE SET
+                            status = EXCLUDED.status,
+                            failed_count = EXCLUDED.failed_count,
+                            details = EXCLUDED.details,
+                            checked_at = CURRENT_TIMESTAMP
+                        """,
                         (
                             batch_id,
                             table,
@@ -95,6 +103,42 @@ def _record_gate1(batch_id, table, manifest, checks, failure=None):
             raise
 
 
+
+def _record_gate2_failure(batch_id, table, manifest, error):
+    """Persist a confirmed Gate 2 contract failure after COPY TX rollback."""
+    with closing(PostgresHook(postgres_conn_id=LOADER_CONN_ID).get_conn()) as conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT status FROM audit.batch_registry "
+                    "WHERE batch_id = %s FOR UPDATE",
+                    (batch_id,),
+                )
+                row = cursor.fetchone()
+                if row and row[0] == "CERTIFIED":
+                    conn.rollback()
+                    return
+                _set_status(
+                    cursor, batch_id, table, manifest, "FAILED", str(error)[:1000]
+                )
+                cursor.execute(
+                    """INSERT INTO audit.dq_results
+                       (batch_id, table_name, gate, check_name,
+                        status, failed_count, details)
+                       VALUES (%s, %s, 'GATE_2', 'load_reconciliation',
+                               'FAIL', 1, %s::jsonb)
+                       ON CONFLICT (batch_id, gate, check_name) DO UPDATE SET
+                           status = EXCLUDED.status,
+                           failed_count = EXCLUDED.failed_count,
+                           details = EXCLUDED.details,
+                           checked_at = CURRENT_TIMESTAMP""",
+                    (batch_id, table, json.dumps({"error": str(error)[:1000]})),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
 def _write_copy_csv(parquet, batch_id, parquet_key, copy_path):
     """Write COPY CSV with NULL distinct from empty string, one row at a time."""
     columns = parquet.schema_arrow.names
@@ -110,7 +154,7 @@ def _write_copy_csv(parquet, batch_id, parquet_key, copy_path):
     return columns
 
 
-def _copy_raw(cursor, table, columns, batch_id, copy_path):
+def _copy_raw(cursor, table, columns, copy_path):
     """Support whichever psycopg driver the installed Airflow provider selected."""
     column_names = columns + ["_batch_id", "_source_file", "_row_hash"]
     statement = (
@@ -136,6 +180,19 @@ def _certify(cursor, table, batch_id, manifest, interval_end):
            WHERE batch_id = %s""",
         (manifest["row_count"], json.dumps(manifest["control_totals"]), batch_id),
     )
+    # A recovered batch must not retain a stale Gate 2 FAIL. Keep this
+    # reconciliation result atomic with raw COPY and certification.
+    cursor.execute(
+        """INSERT INTO audit.dq_results
+           (batch_id, table_name, gate, check_name, status, failed_count, details)
+           VALUES (%s, %s, 'GATE_2', 'load_reconciliation', 'PASS', 0, '{}'::jsonb)
+           ON CONFLICT (batch_id, gate, check_name) DO UPDATE SET
+               status = EXCLUDED.status,
+               failed_count = EXCLUDED.failed_count,
+               details = EXCLUDED.details,
+               checked_at = CURRENT_TIMESTAMP""",
+        (batch_id, table),
+    )
     cursor.execute(
         """INSERT INTO audit.certified_watermarks
               (table_name, certified_high_watermark, last_certified_batch_id)
@@ -152,44 +209,49 @@ def _certify(cursor, table, batch_id, manifest, interval_end):
 
 
 def _load_transaction(
-    table, batch_id, parquet_key, interval_end, manifest, columns, copy_path
+    table, batch_id, interval_end, manifest, columns, copy_path
 ):
-    with closing(PostgresHook(postgres_conn_id=LOADER_CONN_ID).get_conn()) as conn:
-        try:
-            with conn.cursor() as cursor:
-                # SERIALIZATION: one active load per table; gap check under same lock.
-                cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (table,))
-                cursor.execute(
-                    """SELECT COUNT(*) FROM audit.landed_batches AS b
-                       LEFT JOIN audit.batch_registry AS r ON b.batch_id = r.batch_id
-                       WHERE b.table_name = %s
-                         AND b.extraction_mode = 'incremental'
-                         AND b.logical_interval_end < %s
-                         AND r.status IS DISTINCT FROM 'CERTIFIED'""",
-                    (table, interval_end),
-                )
-                if cursor.fetchone()[0]:
-                    raise ValueError("Earlier interval not certified; replay it first")
-                _set_status(cursor, batch_id, table, manifest, "LOADING")
-                cursor.execute(
-                    f"DELETE FROM raw.{identifier(table)} WHERE _batch_id = %s",
-                    (batch_id,),
-                )
-                _copy_raw(cursor, table, columns, batch_id, copy_path)
-                # GATE 2: compare actual stored rows/totals to the manifest (trusted by Gate 1).
-                # Failure raises -> this transaction rolls back, including COPY and status.
-                validate_loaded_batch(
-                    cursor=cursor,
-                    table=table,
-                    batch_id=batch_id,
-                    expected_rows=int(manifest["row_count"]),
-                    expected_totals=manifest["control_totals"],
-                )
-                _certify(cursor, table, batch_id, manifest, interval_end)
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
+    try:
+        with closing(PostgresHook(postgres_conn_id=LOADER_CONN_ID).get_conn()) as conn:
+            try:
+                with conn.cursor() as cursor:
+                    # SERIALIZATION: one active load per table; gap check under same lock.
+                    cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (table,))
+                    cursor.execute(
+                        """SELECT COUNT(*) FROM audit.landed_batches AS b
+                           LEFT JOIN audit.batch_registry AS r ON b.batch_id = r.batch_id
+                           WHERE b.table_name = %s
+                             AND b.extraction_mode = 'incremental'
+                             AND b.logical_interval_end < %s
+                             AND r.status IS DISTINCT FROM 'CERTIFIED'""",
+                        (table, interval_end),
+                    )
+                    if cursor.fetchone()[0]:
+                        raise ValueError("Earlier interval not certified; replay it first")
+                    _set_status(cursor, batch_id, table, manifest, "LOADING")
+                    cursor.execute(
+                        f"DELETE FROM raw.{identifier(table)} WHERE _batch_id = %s",
+                        (batch_id,),
+                    )
+                    _copy_raw(cursor, table, columns, copy_path)
+                    # GATE 2: compare actual stored rows/totals to the manifest (trusted by Gate 1).
+                    # Failure raises -> this transaction rolls back, including COPY and status.
+                    validate_loaded_batch(
+                        cursor=cursor,
+                        table=table,
+                        batch_id=batch_id,
+                        expected_rows=int(manifest["row_count"]),
+                        expected_totals=manifest["control_totals"],
+                    )
+                    _certify(cursor, table, batch_id, manifest, interval_end)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+    except Gate2Failure as error:
+        # The original connection is closed before the independent audit TX.
+        _record_gate2_failure(batch_id, table, manifest, error)
+        raise
 
 
 def load_batch(batch_id):
@@ -217,12 +279,17 @@ def load_batch(batch_id):
                 interval_end=end,
                 check_results=checks,
             )
-        except Exception as exc:
+        except Gate1Failure as exc:
             _record_gate1(batch_id, table, manifest, checks, failure=exc)
+            raise
+        except Exception:
+            # Execution failure: keep partial results, but do not mark the
+            # batch permanently FAILED while Airflow can still retry it.
+            _record_gate1(batch_id, table, manifest, checks)
             raise
         _record_gate1(batch_id, table, manifest, checks)
         columns = _write_copy_csv(parquet, batch_id, parquet_key, copy_path)
         _load_transaction(
-            table, batch_id, parquet_key, end, manifest, columns, copy_path
+            table, batch_id, end, manifest, columns, copy_path
         )
     return {"table": table, "batch_id": batch_id, "loaded": manifest["row_count"]}
