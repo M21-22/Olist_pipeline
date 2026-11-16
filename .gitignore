@@ -40,7 +40,6 @@ Thumbs.db
 *.bak
 
 # Local project planning documents
-plan.md
 docs/phase*.md
 project-state.json
 scripts.txt
