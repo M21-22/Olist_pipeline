@@ -1,12 +1,9 @@
-"""Daily source-vs-certified-raw drift detection, with explicit source quiescence."""
+"""Daily watermark-aware source-vs-certified-raw drift detection."""
 
 from datetime import datetime, timedelta, timezone
 
 from airflow.sdk import dag, task
 from airflow.providers.standard.sensors.external_task import ExternalTaskSensor
-
-from include.extract import MUTABLE_KEYS
-from include.reconcile import compare_table
 
 
 @dag(
@@ -30,6 +27,12 @@ def reconcile():
         queue="default",
     )
 
+    @task(queue="default")
+    def mutable_tables() -> list[str]:
+        from include.common import MUTABLE_KEYS
+
+        return list(MUTABLE_KEYS)
+
     @task(
         queue="batch",
         retries=1,
@@ -37,11 +40,13 @@ def reconcile():
         execution_timeout=timedelta(minutes=20),
     )
     def compare(table: str):
-        return compare_table(table)
+        from include.reconcile import compare_table
 
-    comparisons = compare.expand(table=list(MUTABLE_KEYS))
+        return compare_table(table, mode="continuous")
 
-    wait_for_ingest >> comparisons
+    tables = mutable_tables()
+    wait_for_ingest >> tables
+    compare.expand(table=tables)
 
 
 reconcile()

@@ -1,11 +1,9 @@
-"""Incremental landing and basic raw certification. Two distinct steps per table."""
+"""Independent per-table landing and certification (Airflow 3 mapped TaskGroup)."""
 
 from datetime import datetime, timedelta, timezone
 
-from airflow.sdk import dag, task, get_current_context
-
-from include.extract import MUTABLE_KEYS, land_table
-from include.load import load_batch
+from airflow.sdk import dag, get_current_context, task, task_group
+from airflow.sdk.exceptions import AirflowFailException
 
 
 @dag(
@@ -17,29 +15,52 @@ from include.load import load_batch
     tags=["olist", "ingestion"],
 )
 def ingest():
-    @task(
-        queue="ingest",
-        retries=3,
-        retry_delay=timedelta(minutes=1),
-        retry_exponential_backoff=True,
-        execution_timeout=timedelta(minutes=10),
-    )
-    def land(table: str):
-        interval_end = get_current_context()["data_interval_end"].isoformat()
-        return land_table(table, interval_end)
+    @task(queue="default")
+    def mutable_tables() -> list[str]:
+        from include.common import MUTABLE_KEYS
 
-    @task(
-        queue="ingest",
-        retries=3,
-        retry_delay=timedelta(minutes=1),
-        retry_exponential_backoff=True,
-        execution_timeout=timedelta(minutes=10),
-    )
-    def certify(batch: str):
-        return load_batch(batch)
+        return list(MUTABLE_KEYS)
 
-    landed = land.expand(table=list(MUTABLE_KEYS))
-    certify.expand(batch=landed)
+    @task_group(group_id="per_table")
+    def per_table(table: str):
+        @task(
+            queue="ingest",
+            retries=3,
+            retry_delay=timedelta(minutes=1),
+            retry_exponential_backoff=True,
+            execution_timeout=timedelta(minutes=10),
+        )
+        def land(table: str) -> str:
+            from include.extract import land_table
+
+            context = get_current_context()
+            interval_end = context.get("data_interval_end")
+            if interval_end is None:
+                interval_end = context["dag_run"].run_after
+
+            return land_table(table, interval_end.isoformat())
+
+        @task(
+            queue="ingest",
+            retries=3,
+            retry_delay=timedelta(minutes=1),
+            retry_exponential_backoff=True,
+            execution_timeout=timedelta(minutes=10),
+        )
+        def certify(batch: str):
+            from include.gates.gate1 import Gate1Failure
+            from include.load import load_batch
+
+            try:
+                return load_batch(batch)
+            except Gate1Failure as error:
+                raise AirflowFailException(
+                    f"Gate 1 validation failed: {error}"
+                ) from error
+
+        certify(land(table))
+
+    per_table.expand(table=mutable_tables())
 
 
 ingest()
