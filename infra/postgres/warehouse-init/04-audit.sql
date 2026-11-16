@@ -68,7 +68,8 @@ CREATE TABLE audit.dq_results (
     status TEXT NOT NULL,
     failed_count BIGINT NOT NULL DEFAULT 0,
     details JSONB NOT NULL DEFAULT '{}'::JSONB,
-    checked_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    checked_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT BGC UNIQUE (batch_id, gate, check_name)
 );
 
 CREATE TABLE audit.reconciliation (

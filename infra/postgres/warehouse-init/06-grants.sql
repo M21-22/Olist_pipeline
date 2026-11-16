@@ -54,7 +54,7 @@ TO dbt_runner;
 
 GRANT SELECT ON
 audit.batch_registry,
-audit.serving_state
+audit.certified_watermarks
 TO dbt_runner;
 
 GRANT SELECT ON ALL TABLES IN SCHEMA audit TO soda_reader, grafana_reader;

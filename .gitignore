@@ -40,7 +40,7 @@ Thumbs.db
 *.bak
 
 # Local project planning documents
-plan-v2.md
-phase1-guide-celery.md
-phase2-guide.md
+plan.md
+docs/phase*.md
 project-state.json
+scripts.txt
