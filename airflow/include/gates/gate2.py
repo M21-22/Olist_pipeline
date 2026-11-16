@@ -5,17 +5,19 @@ from decimal import Decimal
 from include.common import identifier
 
 
+class Gate2Failure(ValueError):
+    """Persisted raw data does not match the Gate 2 contract."""
+
+
 def validate_loaded_batch(*, cursor, table, batch_id, expected_rows, expected_totals):
-    # GATE 2 / ROW COUNT: database rows written by this batch, not file metadata.
     cursor.execute(
         f"SELECT COUNT(*) FROM raw.{identifier(table)} WHERE _batch_id = %s",
         (batch_id,),
     )
     actual_rows = cursor.fetchone()[0]
     if actual_rows != expected_rows:
-        raise ValueError(f"Gate 2: expected {expected_rows} rows, found {actual_rows}")
+        raise Gate2Failure(f"Gate 2: expected {expected_rows} rows, found {actual_rows}")
 
-    # GATE 2 / CONTROL TOTALS: sum persisted numeric values; compare to manifest.
     for name, expected in expected_totals.items():
         cursor.execute(
             f"SELECT COALESCE(SUM({identifier(name)}), 0) "
@@ -24,4 +26,4 @@ def validate_loaded_batch(*, cursor, table, batch_id, expected_rows, expected_to
         )
         actual = cursor.fetchone()[0]
         if Decimal(actual) != Decimal(expected):
-            raise ValueError(f"Gate 2: persisted control-total mismatch: {name}")
+            raise Gate2Failure(f"Gate 2: persisted control-total mismatch: {name}")

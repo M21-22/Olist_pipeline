@@ -10,6 +10,7 @@ from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
@@ -23,8 +24,14 @@ from include.common import (
 )
 
 
+class ContractViolation(ValueError):
+    """An evaluated input violates a defined data contract."""
+
 class Gate1Failure(ValueError):
     """Gate 1 failed one or more reported checks."""
+
+class Gate1ExecutionError(RuntimeError):
+    """Gate 1 could not complete due to an operational error."""
 
 
 def validate_batch_keys_duckdb(parquet_path, table):
@@ -46,7 +53,7 @@ def validate_batch_keys_duckdb(parquet_path, table):
                 [str(parquet_path)],
             ).fetchone()
     if duplicate:
-        raise ValueError(f"Duplicate business key: {duplicate[:-1]!r}")
+        raise ContractViolation(f"Duplicate business key: {duplicate[:-1]!r}")
 
 
 def _gx_checks(parquet, table, manifest):
@@ -90,68 +97,67 @@ def _gx_checks(parquet, table, manifest):
     return checks
 
 
-def raise_error(error: Exception) -> None:
-    raise error
-
-
 def validate_landed_batch(
     *, manifest, parquet_path, batch_id, table, mode, interval_end, check_results=None
 ):
-    """Return ParquetFile on success. Append one PASS/FAIL result per evaluated check."""
+    """Return ParquetFile; record PASS/FAIL/ERROR for evaluated checks."""
     checks = check_results if check_results is not None else []
     failures = []
+
+    def record(name, status, message=None):
+        result = {
+            "check_name": name,
+            "status": status,
+            "failed_count": 1 if status == "FAIL" else 0,
+        }
+        if message is not None:
+            result["details"] = {"error": str(message)[:1000]}
+        checks.append(result)
+        if status == "FAIL":
+            failures.append(f"{name}: {message}")
+
+    def execution_error(name, error):
+        record(name, "ERROR", error)
+        raise Gate1ExecutionError(f"{name}: {error}") from error
 
     def run(name, fn):
         try:
             fn()
-            checks.append({"check_name": name, "status": "PASS", "failed_count": 0})
-            return True
-        except Exception as e:
-            message = str(e)[:1000]
-            checks.append(
-                {
-                    "check_name": name,
-                    "status": "FAIL",
-                    "failed_count": 1,
-                    "details": {"error": message},
-                }
-            )
-            failures.append(f"{name}: {message}")
+        except ContractViolation as error:
+            record(name, "FAIL", error)
             return False
+        except Exception as error:
+            execution_error(name, error)
+        record(name, "PASS")
+        return True
 
     def require(test, reason):
         if not test:
-            raise ValueError(reason)
+            raise ContractViolation(reason)
 
-    if not run(
-        "manifest_contract",
-        lambda: require(
-            isinstance(manifest, dict)
-            and {
-                "table",
-                "batch_id",
-                "mode",
-                "interval_start",
-                "interval_end",
-                "overlap_minutes",
-                "sha256",
-                "row_count",
-                "schema_fingerprint",
-                "null_counts",
-                "control_totals",
-                "min_updated_at",
-                "max_updated_at",
-            }
-            <= manifest.keys()
-            and table in MUTABLE_KEYS
-            and manifest["table"] == table
-            and manifest["batch_id"] == batch_id
-            and manifest["mode"] == mode == "incremental"
-            and as_utc(manifest["interval_end"]) == as_utc(interval_end)
-            and int(manifest["overlap_minutes"]) >= 0,
-            "Invalid manifest fields, table, mode or interval",
-        ),
-    ):
+    def validate_manifest_contract():
+        # Malformed manifest values are input errors, not infrastructure failures.
+        try:
+            valid = (
+                isinstance(manifest, dict)
+                and {
+                    "table", "batch_id", "mode", "interval_start",
+                    "interval_end", "overlap_minutes", "sha256", "row_count",
+                    "schema_fingerprint", "null_counts", "control_totals",
+                    "min_updated_at", "max_updated_at",
+                } <= manifest.keys()
+                and table in MUTABLE_KEYS
+                and manifest["table"] == table
+                and manifest["batch_id"] == batch_id
+                and manifest["mode"] == mode == "incremental"
+                and as_utc(manifest["interval_end"]) == as_utc(interval_end)
+                and int(manifest["overlap_minutes"]) >= 0
+            )
+        except (ValueError, TypeError, KeyError, OverflowError) as error:
+            raise ContractViolation("Invalid manifest fields, table, mode or interval") from error
+        require(valid, "Invalid manifest fields, table, mode or interval")
+
+    if not run("manifest_contract", validate_manifest_contract):
         raise Gate1Failure("; ".join(failures))
 
     parquet_path = Path(parquet_path)
@@ -161,20 +167,23 @@ def validate_landed_batch(
             sha256_file(parquet_path) == manifest["sha256"], "Parquet SHA-256 mismatch"
         ),
     )
-    # If the file cannot be opened, other file checks are not meaningful.
+    # Invalid Parquet format is a permanent data failure; I/O errors are retryable.
     try:
         parquet = pq.ParquetFile(parquet_path)
-    except Exception as e:
-        run("parquet_open", lambda err=e: raise_error(err))
-        raise Gate1Failure("; ".join(failures)) from e
-    run("parquet_open", lambda: None)
+    except pa.ArrowInvalid as error:
+        record("parquet_open", "FAIL", error)
+        raise Gate1Failure("; ".join(failures)) from error
+    except Exception as error:
+        execution_error("parquet_open", error)
+    record("parquet_open", "PASS")
 
     # GATE 1 / SCHEMA: compare against authoritative per-table schema, not file names.
     actual_schema = parquet.schema_arrow
+    schema_matches = actual_schema.equals(expected_schema(table), check_metadata=False)
     run(
         "source_schema",
         lambda: require(
-            actual_schema.equals(expected_schema(table), check_metadata=False),
+            schema_matches,
             "Parquet columns or Arrow types differ from source contract",
         ),
     )
@@ -193,7 +202,7 @@ def validate_landed_batch(
             "Parquet metadata row mismatch",
         ),
     )
-    if not actual_schema.equals(expected_schema(table), check_metadata=False):
+    if not schema_matches:
         raise Gate1Failure("; ".join(failures))
 
     # GATE 1 / FILE STATISTICS: scan once, report each independent check.
@@ -220,56 +229,56 @@ def validate_landed_batch(
 
     try:
         count, nulls, totals, low, high = scan_statistics()
-        checks.append({"check_name": "file_scan", "status": "PASS", "failed_count": 0})
-        run(
-            "scanned_row_count",
-            lambda: require(
-                count == manifest["row_count"], "Scanned row count mismatch"
-            ),
-        )
-        run(
-            "null_counts",
-            lambda: require(nulls == manifest["null_counts"], "NULL counts mismatch"),
-        )
+    except Exception as error:
+        execution_error("file_scan", error)
+    record("file_scan", "PASS")
+    run(
+        "scanned_row_count",
+        lambda: require(
+            count == manifest["row_count"], "Scanned row count mismatch"
+        ),
+    )
+    run(
+        "null_counts",
+        lambda: require(nulls == manifest["null_counts"], "NULL counts mismatch"),
+    )
 
-        def compare_totals():
+    def compare_totals():
+        require(
+            set(manifest["control_totals"]) == set(totals),
+            "Control-total fields mismatch",
+        )
+        for name, total in totals.items():
             require(
-                set(manifest["control_totals"]) == set(totals),
-                "Control-total fields mismatch",
+                total == Decimal(manifest["control_totals"][name]),
+                f"Control total mismatch: {name}",
             )
-            for name, total in totals.items():
-                require(
-                    total == Decimal(manifest["control_totals"][name]),
-                    f"Control total mismatch: {name}",
-                )
 
-        run("control_totals", compare_totals)
-        run(
-            "min_updated_at",
-            lambda: require(
-                (as_utc(low) if low is not None else None)
-                == (
-                    as_utc(manifest["min_updated_at"])
-                    if manifest["min_updated_at"]
-                    else None
-                ),
-                "min_updated_at mismatch",
+    run("control_totals", compare_totals)
+    run(
+        "min_updated_at",
+        lambda: require(
+            (as_utc(low) if low is not None else None)
+            == (
+                as_utc(manifest["min_updated_at"])
+                if manifest["min_updated_at"]
+                else None
             ),
-        )
-        run(
-            "max_updated_at",
-            lambda: require(
-                (as_utc(high) if high is not None else None)
-                == (
-                    as_utc(manifest["max_updated_at"])
-                    if manifest["max_updated_at"]
-                    else None
-                ),
-                "max_updated_at mismatch",
+            "min_updated_at mismatch",
+        ),
+    )
+    run(
+        "max_updated_at",
+        lambda: require(
+            (as_utc(high) if high is not None else None)
+            == (
+                as_utc(manifest["max_updated_at"])
+                if manifest["max_updated_at"]
+                else None
             ),
-        )
-    except Exception as e:
-        run("file_scan", lambda err=e: raise_error(err))
+            "max_updated_at mismatch",
+        ),
+    )
 
     run("duckdb_unique_keys", lambda: validate_batch_keys_duckdb(parquet_path, table))
 
@@ -286,8 +295,8 @@ def validate_landed_batch(
             )
             if not passed:
                 failures.append(f"{name}: {failed_count} unexpected values")
-    except Exception as e:
-        run("gx_execution", lambda err=e: raise_error(err))
+    except Exception as error:
+        execution_error("gx_execution", error)
 
     if failures:
         raise Gate1Failure("; ".join(failures)[:2000])
