@@ -1,7 +1,7 @@
 """Opt-in isolated PostgreSQL test: empty Parquet Gate 1 -> Gate 2 -> certification.
 
-Requires Airflow connections olist_test_loader (etl_loader on warehouse_gate2_test)
-and olist_test_admin (fixture role on warehouse_gate2_test). Does not touch S3.
+Requires Airflow connections olist_test_loader (etl_loader on warehouse_test)
+and olist_test_admin (fixture role on warehouse_test). Does not touch S3.
 """
 import json
 import os
@@ -23,7 +23,7 @@ from include.gates.gate1 import validate_landed_batch
 END = datetime(1900, 1, 1, tzinfo=timezone.utc)
 START = END - timedelta(minutes=15)
 TABLE = "orders"
-DB_NAME = "warehouse_gate2_test"
+DB_NAME = "warehouse_test"
 
 
 def get_connection(conn_id):

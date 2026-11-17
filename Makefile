@@ -67,22 +67,25 @@ emulator-reset:
 check2:
 	bash scripts/check-phase2.sh
 
-# Ephemeral regression stack; never uses production DB volumes.
+# Ephemeral regression stack
 TEST_COMPOSE := docker compose -f infra/compose.test.yaml
 
 .PHONY: test test-unit test-integration test-clean
 
 test:
 	@set -e; trap '$(TEST_COMPOSE) down -v --remove-orphans' EXIT; \
-	  $(TEST_COMPOSE) up -d --wait test-db; \
+	  $(TEST_COMPOSE) build test-runner; \
+	  $(TEST_COMPOSE) up -d --wait test-db test-s3; \
 	  $(TEST_COMPOSE) run --rm test-runner
 
 test-unit:
-	$(TEST_COMPOSE) up -d --wait test-db
+	$(TEST_COMPOSE) build test-runner
+	$(TEST_COMPOSE) up -d --wait test-db test-s3
 	$(TEST_COMPOSE) run --rm test-runner -v -ra /opt/airflow/tests/unit
 
 test-integration:
-	$(TEST_COMPOSE) up -d --wait test-db
+	$(TEST_COMPOSE) build test-runner
+	$(TEST_COMPOSE) up -d --wait test-db test-s3
 	$(TEST_COMPOSE) run --rm test-runner -v -ra /opt/airflow/tests/integration
 
 test-clean:

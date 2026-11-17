@@ -24,7 +24,7 @@ x-airflow-common: &airflow-common
     AIRFLOW_CONN_OLIST_S3: '{"conn_type":"aws","login":"${S3_PIPELINE_ACCESS_KEY}","password":"${S3_PIPELINE_SECRET_KEY}","extra":{"endpoint_url":"http://minio:9000","region_name":"us-east-1"}}'
     AIRFLOW_CONN_OLIST_LOADER: postgresql://etl_loader:${ETL_LOADER_PASSWORD}@warehouse-db:5432/warehouse
     AIRFLOW_CONN_OLIST_RECONCILE: postgresql://dbt_runner:${DBT_RUNNER_PASSWORD}@warehouse-db:5432/warehouse
-    AIRFLOW_CONN_OLIST_TEST_ADMIN: "postgresql://olist_test_admin:${OLIST_TEST_ADMIN_PASSWORD_ENCODED}@warehouse-db:5432/warehouse_gate2_test"
+    AIRFLOW_CONN_OLIST_TEST_ADMIN: "postgresql://olist_test_admin:${OLIST_TEST_ADMIN_PASSWORD_ENCODED}@warehouse-db:5432/warehouse_test"
 
   volumes:
     - ../airflow/dags:/opt/airflow/dags
@@ -51,7 +51,7 @@ services:
       <<: *airflow-common-env
       AIRFLOW__CELERY__WORKER_CONCURRENCY: "4"
       AIRFLOW__CELERY__DEFAULT_QUEUE: default
-      AIRFLOW_CONN_OLIST_TEST_LOADER: "postgresql://etl_loader:${ETL_LOADER_PASSWORD}@warehouse-db:5432/warehouse_gate2_test"
+      AIRFLOW_CONN_OLIST_TEST_LOADER: "postgresql://etl_loader:${ETL_LOADER_PASSWORD}@warehouse-db:5432/warehouse_test"
     depends_on:
       warehouse-db:
         condition: service_healthy
