@@ -22,6 +22,12 @@ from include.gates.gate1 import Gate1Failure, validate_landed_batch
 from include.gates.gate2 import Gate2Failure, validate_loaded_batch
 
 LOADER_CONN_ID = "olist_loader"
+QUARANTINE_BUCKET = "quarantine"
+
+
+class PredecessorNotCertified(ValueError):
+    """An earlier landed interval must be certified before this one."""
+
 
 
 def _lookup_batch(batch_id):
@@ -66,7 +72,7 @@ def _set_status(cursor, batch_id, table, manifest, status, reason=None):
     )
 
 
-def _record_gate1(batch_id, table, manifest, checks, failure=None):
+def _record_gate1(batch_id, table, manifest, checks, failure=None, *, failure_status="FAILED"):
     """Persist all evaluated Gate 1 outcomes even when subsequent checks fail."""
     with closing(PostgresHook(postgres_conn_id=LOADER_CONN_ID).get_conn()) as conn:
         try:
@@ -95,7 +101,7 @@ def _record_gate1(batch_id, table, manifest, checks, failure=None):
                     )
                 if failure is not None:
                     _set_status(
-                        cursor, batch_id, table, manifest, "FAILED", str(failure)[:1000]
+                        cursor, batch_id, table, manifest, failure_status, str(failure)[:1000]
                     )
             conn.commit()
         except Exception:
@@ -227,7 +233,7 @@ def _load_transaction(
                         (table, interval_end),
                     )
                     if cursor.fetchone()[0]:
-                        raise ValueError("Earlier interval not certified; replay it first")
+                        raise PredecessorNotCertified("Earlier interval not certified; replay it first")
                     _set_status(cursor, batch_id, table, manifest, "LOADING")
                     cursor.execute(
                         f"DELETE FROM raw.{identifier(table)} WHERE _batch_id = %s",
@@ -254,13 +260,55 @@ def _load_transaction(
         raise
 
 
+
+
+def _quarantine_gate1_failure(s3, *, table, batch_id, parquet_key, manifest_key, error, checks):
+    """Copy failed landing artifacts and publish reason.json LAST.
+
+    S3 copy_object is idempotent at the key level. Do not delete immutable
+    landing artifacts; publication of reason.json signals complete quarantine.
+    """
+    prefix = f"{table}/{batch_id}/"
+    for source_key, name in ((parquet_key, "batch.parquet"), (manifest_key, "manifest.json")):
+        s3.copy_object(
+            Bucket=QUARANTINE_BUCKET,
+            Key=prefix + name,
+            CopySource={"Bucket": BUCKET, "Key": source_key},
+        )
+    reason = {
+        "table": table, "batch_id": batch_id, "gate": "GATE_1",
+        "reason": str(error)[:2000], "checks": checks,
+        "landing_parquet_key": parquet_key, "landing_manifest_key": manifest_key,
+    }
+    s3.put_object(
+        Bucket=QUARANTINE_BUCKET, Key=prefix + "reason.json",
+        Body=canonical_json(reason), ContentType="application/json",
+    )
+
 def load_batch(batch_id):
     """Gate 1 -> audit -> CSV COPY -> Gate 2 -> atomic certification."""
     table, parquet_key, manifest_key, end, mode = _lookup_batch(batch_id)
     s3 = S3Hook(aws_conn_id=S3_CONN_ID).get_conn()
     response = s3.get_object(Bucket=BUCKET, Key=manifest_key)
     try:
-        manifest = json.loads(response["Body"].read())
+        try:
+            manifest = json.loads(response["Body"].read())
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            failure = Gate1Failure(f"manifest_json: invalid JSON: {error}")
+            checks = [{
+                "check_name": "manifest_json", "status": "FAIL",
+                "failed_count": 1, "details": {"error": str(error)[:1000]},
+            }]
+            _record_gate1(batch_id, table, {}, checks)
+            _quarantine_gate1_failure(
+                s3, table=table, batch_id=batch_id, parquet_key=parquet_key,
+                manifest_key=manifest_key, error=failure, checks=checks,
+            )
+            _record_gate1(
+                batch_id, table, {}, checks, failure=failure,
+                failure_status="QUARANTINED",
+            )
+            raise failure from error
     finally:
         response["Body"].close()
 
@@ -280,7 +328,17 @@ def load_batch(batch_id):
                 check_results=checks,
             )
         except Gate1Failure as exc:
-            _record_gate1(batch_id, table, manifest, checks, failure=exc)
+            # Preserve evaluated DQ checks even if object-store quarantine fails.
+            # A failed copy/upload is operational and must remain retryable.
+            _record_gate1(batch_id, table, manifest, checks)
+            _quarantine_gate1_failure(
+                s3, table=table, batch_id=batch_id, parquet_key=parquet_key,
+                manifest_key=manifest_key, error=exc, checks=checks,
+            )
+            _record_gate1(
+                batch_id, table, manifest, checks, failure=exc,
+                failure_status="QUARANTINED",
+            )
             raise
         except Exception:
             # Execution failure: keep partial results, but do not mark the
