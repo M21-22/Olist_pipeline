@@ -40,9 +40,13 @@ def reconcile():
         execution_timeout=timedelta(minutes=20),
     )
     def compare(table: str):
-        from include.reconcile import compare_table
+        from include.reconcile import ReconciliationMismatch, compare_table
+        from airflow.sdk.exceptions import AirflowFailException
 
-        return compare_table(table, mode="continuous")
+        try:
+            return compare_table(table, mode="continuous")
+        except ReconciliationMismatch as error:
+            raise AirflowFailException(str(error)) from error
 
     tables = mutable_tables()
     wait_for_ingest >> tables

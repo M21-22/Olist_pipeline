@@ -50,7 +50,7 @@ def test_ingest_keeps_scheduling_and_queues():
     assert 'schedule="*/15 * * * *"' in text
     assert 'max_active_runs=1' in text
     assert text.count('queue="ingest"') == 2
-    assert 'except Gate1Failure' in text
+    assert 'except (Gate1Failure, Gate2Failure, PredecessorNotCertified)' in text
     assert 'raise AirflowFailException' in text
     assert 'retries=3' in text
 
@@ -61,3 +61,10 @@ def test_reconcile_preserves_dependency_and_batch_queue():
     assert 'compare.expand(table=tables)' in text
     assert 'queue="batch"' in text
     assert 'mode="continuous"' in text
+
+
+def test_reconcile_mismatch_is_nonretryable_and_other_errors_retry():
+    text = source('reconcile.py')
+    assert 'except ReconciliationMismatch as error:' in text
+    assert 'raise AirflowFailException(str(error)) from error' in text
+    assert 'retries=1' in text

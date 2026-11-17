@@ -49,13 +49,14 @@ def ingest():
         )
         def certify(batch: str):
             from include.gates.gate1 import Gate1Failure
-            from include.load import load_batch
+            from include.gates.gate2 import Gate2Failure
+            from include.load import PredecessorNotCertified, load_batch
 
             try:
                 return load_batch(batch)
-            except Gate1Failure as error:
+            except (Gate1Failure, Gate2Failure, PredecessorNotCertified) as error:
                 raise AirflowFailException(
-                    f"Gate 1 validation failed: {error}"
+                    f"Permanent ingest validation/predecessor failure: {error}"
                 ) from error
 
         certify(land(table))
