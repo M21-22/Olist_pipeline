@@ -51,9 +51,14 @@ services:
       AIRFLOW_CONN_OLIST_TEST_LOADER: postgresql://etl_loader:ci_loader_only@test-db:5432/warehouse_test
       OLIST_TEST_ADMIN_CONN_ID: olist_test_admin
       OLIST_RUN_DB_INTEGRATION: "1"
+      OLIST_TEST_DBT: "1"
+      DBT_HOST: test-db
+      DBT_RUNNER_PASSWORD: ci_dbt_only
     volumes:
       - ../tests:/opt/airflow/tests:ro
       - ../airflow/dags:/opt/airflow/dags:ro
+      - ../dbt:/opt/airflow/dbt:ro
+      - ./postgres/warehouse-init:/opt/airflow/infra/postgres/warehouse-init:ro
     working_dir: /opt/airflow
     entrypoint: ["python", "-m", "pytest"]
     command: ["-v", "-ra", "/opt/airflow/tests"]

@@ -6,12 +6,18 @@ model-paths: [models]
 snapshot-paths: [snapshots]
 macro-paths: [macros]
 
+flags:
+  send_anonymous_usage_stats: false
+
 models:
   olist:
     staging:
       +schema: staging
       +materialized: incremental
-      +incremental_strategy: delete+insert
+      +incremental_strategy: merge
+      +on_schema_change: fail
+      # Each mutable model declares its unique_key and hooks in its own SQL.
+      # Full-snapshot reference tables need replacement, not upsert.
       +grants:
         select: [soda_reader]
     marts:
