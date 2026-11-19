@@ -1,9 +1,4 @@
-"""Focused Gate 2 unit tests; run in an Airflow environment with pytest installed.
-
-Requires the Package B.2 code changes:
-- Gate2Failure raised by validate_loaded_batch for contract mismatches
-- _load_transaction records Gate2Failure after rolling back and closing its connection
-"""
+"""Focused Gate 2 unit tests"""
 
 from datetime import datetime, timezone
 from decimal import Decimal

@@ -1,7 +1,4 @@
-"""AST regression checks: caller positional arity matches local function signatures.
-
-Intentionally dependency-free so pytest can run in the developer venv.
-"""
+"""AST regression checks: caller positional arity matches local function signatures."""
 import ast
 from pathlib import Path
 
