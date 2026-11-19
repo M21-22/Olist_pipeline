@@ -11,7 +11,7 @@
 
 ## Locked implementation decisions and precedence
 
-This document is the **target architecture and implementation roadmap**, updated to reflect verified progress as of **2026-11-17**. It is **not** the operational source of truth for interfaces. Current repository code, SQL, Docker Compose, and executed test results take precedence over historical proposals here. A phase can be partially implemented before its complete acceptance criteria are met. Do not infer that a planned service, DAG, audit table, role, alert, or failure-injection harness exists merely because it appears in this plan.
+This document is the **target architecture and implementation roadmap**, updated to reflect reported and verified progress as of **2026-11-19**. It is **not** the operational source of truth for interfaces. Current repository code, SQL, Docker Compose, and executed test results take precedence over historical proposals here. A phase can be partially implemented before its complete acceptance criteria are met. Do not infer that a planned service, DAG, audit table, role, alert, or failure-injection harness exists merely because it appears in this plan.
 
 - **Naming:** `source-db`, `warehouse-db`, `minio` (Silo image), `valkey`, `airflow-api-server`, `airflow-scheduler`, `airflow-dag-processor`, `airflow-worker-general-1`, `airflow-worker-general-2`, `airflow-worker-batch`. Source role `source_reader`; emulator role `emulator_writer`; Airflow metadata role `airflow_user`.
 - **Configuration:** `.env.example` matches local `.env` variable names; `SIM_FROM` and `SIM_TO` are empty until explicitly set for a run. Never commit secret values.
@@ -19,15 +19,16 @@ This document is the **target architecture and implementation roadmap**, updated
 - **Watermarks:** independent landed and certified checkpoints; landed after manifest + audit registry, certified after Gate 2. Failed Gate 1/2 batches do not roll back landed progress; certification cannot skip a failed interval.
 - **Airflow Python delivery:** Phase 3 packages reusable `airflow/include/` code in the Airflow image; no retroactive Phase 1 mount change.
 - **Reference-state semantics:** each certified static snapshot replaces the current reference state in downstream staging; it is not unioned with prior snapshots.
-- **Source delete and silent update recovery:** the implemented reconciliation compares source and certified raw state, but automated repair/tombstone generation is a **future Phase 7 objective**. Timestamp extraction alone does not capture these events.
+- **Source delete and silent update recovery:** current staging consumes registered `audit.deleted_keys` tombstones and removes matching incremental target rows. The reconciliation process does not yet generate certified repair/tombstone batches or resolve reinsertion; those remain **Phase 7 objectives**. Timestamp extraction alone does not capture these events.
 - **Tests:** Phase 2 passed the 2017-03-01–2017-03-08 deterministic replay and restart tests. The ingestion DAG's seven mapped `land → certify` chains passed a normal manual run after the manual-run interval fix. The Docker-backed `make test` regression suite passed locally, including dedicated Gate 1 tests and isolated Gate 2 PostgreSQL integration. GitHub Actions execution and controlled single-table failure isolation have **not** yet been confirmed.
 - **Actual loader signatures:** `_copy_raw(cursor, table, columns, copy_path)` and `_load_transaction(table, batch_id, interval_end, manifest, columns, copy_path)`. Never reintroduce unsupported `batch_id` or `parquet_key` parameters at these call sites.
 - **Incremental window:** the implemented extraction boundary is `updated_at > start AND updated_at <= end` (with overlap applied when deriving the start). Manual DAG runs may have no `data_interval_end`; the ingestion task falls back to `dag_run.run_after`.
 - **Reconciliation:** continuous (watermark-aware, lag-deferring) and full (strict, quiescent-source) modes exist and are tested against raw certified state. Automated repair/tombstone generation and the full Phase 7/Soda acceptance criteria remain future work.
+- **Phase 5 incremental staging choice:** seven mutable `stg_*` models use PostgreSQL dbt `merge` with model-level `unique_key` and a per-model certification cursor in `audit.dbt_staging_progress`; two reference models use `table` replacement. This supersedes the original 24-hour `delete+insert` lookback proposal. Passing the local disposable-Postgres regression is not proof of concurrent-run safety, late certification ordering, full-refresh equivalence, or automated delete lifecycle.
 
 ---
 
-## Current implementation status (2026-11-17)
+## Current implementation status (2026-11-19)
 
 | Phase | Current position | Evidence / remaining work |
 |---|---|---|
@@ -36,7 +37,8 @@ This document is the **target architecture and implementation roadmap**, updated
 | 2 — Emulator | One-week deterministic replay verified | 2017-03-01 to 2017-03-08, seed 42, repeatability and resume verified; full-history acceptance pending |
 | 3 — Incremental extraction | Implemented and exercised | Seven mapped tables, landing, watermarks, manifest and manual-run handling; full fault-injection proof remains pending |
 | 4 — Landing quality and raw certification | Implemented and exercised | Gate 1 / Gate 2, raw loading, audit and rollback semantics; tests pass locally; complete defect-catalog demonstration and alerts pending |
-| 5–6 — dbt staging and marts | In development | dbt work is not yet considered accepted; do not infer completeness from files under `dbt/` |
+| 5 — dbt staging | Runtime and core incremental path locally tested; phase incomplete | `dbt debug` and `dbt parse` passed on batch worker, privileges checked; local `make test` passed including repeated `stg_orders` incremental run, replay and registered tombstone. Rejection handling, full model integration, Airflow transform DAG, and edge-case validation remain pending |
+| 6 — dbt marts | In development | Marts and snapshot acceptance not demonstrated; no completion claim |
 | 7 — Gates 3–4 and reconciliation | Partially implemented ahead of phase | `reconcile` supports continuous and strict full modes; dbt/Soda gates, automatic repair and end-to-end acceptance remain pending |
 | 8–11 — Chaos, API, observability, security/DR | Planned / partial foundations | No phase-level completion claim |
 | 12 — CI/CD and documentation | Partial early implementation | Local isolated `make test` passes, GitHub Actions regression workflow exists; remote CI verification, DAG failure isolation and full release/demo checks remain pending |
@@ -318,21 +320,25 @@ The steps and acceptance criteria below define this phase; verify implemented se
 
 ### Phase 5: dbt staging
 
-**Steps**
-1. **Add the dbt virtualenv layer to the Airflow image** (see 5.2) and raise the batch worker's memory cap from 2048 to 3072 MiB. dbt tasks run on `queue="batch"` and connect as `dbt_runner`.
-2. dbt project with `sources` for `raw` (including **source freshness** on `_loaded_at`).
-3. Staging models read only batches with `batch_registry.status = 'CERTIFIED'`. Pattern: `raw` joined to `audit.batch_registry`.
-4. Per model:
-   - cast and rename types, normalize text (trim, case, state code uppercase), parse timestamps;
-   - **dedupe** by business key, keeping the latest by (`updated_at`, then `_loaded_at`);
-   - **status monotonicity:** for orders, the latest valid state wins; an older snapshot arriving later must not overwrite a newer one;
-   - **reject routing:** rows failing value rules go to `quarantine.rejected_rows` with a reason code, and are excluded from `stg_*`.
-5. Use PostgreSQL dbt incremental `delete+insert` with an explicit `unique_key` and 24-hour lookback; older corrections are processed through reconciliation repair batches. Record this fixed policy in an ADR.
-6. Handle **hard deletes**: a `staging_deleted_keys` model fed by the reconciliation job (Phase 7), applying soft deletion flags.
-7. Enable **model contracts** (`contract: {enforced: true}`) on all staging models.
+**Current architecture decision (supersedes original lookback proposal):** Seven mutable sources use dbt-postgres `incremental` with `incremental_strategy: merge`; each `stg_*` SQL file declares its own `unique_key`. `stg_geolocation` and `stg_product_category_translation` are `table` materializations that replace the current certified reference snapshot. The 24-hour `_loaded_at` lookback and `delete+insert` approach have **not** been adopted: relying on a wall-clock window can miss late certifications or historical replays. `merge` is not inherently more correct; correctness comes from certification-driven key selection, deterministic version resolution, and transactional cursor management.
 
-**Deliverables:** `stg_orders`, `stg_order_items`, `stg_payments`, `stg_reviews`, `stg_customers`, `stg_products`, `stg_sellers`, `stg_geolocation`, `rejected_rows`.
-**Acceptance:** staging contains exactly one row per business key; replaying the same batches twice leaves staging unchanged; every injected bad-value row appears in `quarantine.rejected_rows` with the right reason code.
+**Implemented and locally verified foundations**
+1. **Runtime (Phase 5.1):** dbt Core 1.11.17 / dbt-postgres 1.11.0 in `/home/airflow/dbt-venv` on the batch-worker image, read-only project mount `/opt/airflow/dbt`, connection as `dbt_runner`. `dbt debug`, `dbt parse`, and runtime/role checks passed. The API `orders` view remains disabled while `fct_orders` is disabled.
+2. **Certified input:** mutable staging SQL joins `raw` to `audit.batch_registry` and reads only `status = 'CERTIFIED'`. dbt source declarations use the active target database (no hardcoded `warehouse` name), enabling isolated tests on `warehouse_test`.
+3. **Incremental changed keys (Phase 5.2):** `staging_prepare` captures a `(certified_at, batch_id)` cutoff in `audit.dbt_staging_progress`. On incremental runs, `staging_incremental_key_filter` finds keys touched by newly certified batches; for each key, the staging SQL ranks **all certified raw versions** by `src.updated_at DESC NULLS LAST`, then `registry.certified_at DESC NULLS LAST`, `_batch_id DESC`, `_row_hash DESC`. `staging_finalize` advances the durable cursor after the model operation in the dbt transaction. This also advances past empty certified batches.
+4. **Current-state deletion read path:** `encode_business_key` standardizes the text key used to compare staging rows with `audit.deleted_keys`. Staging excludes registered tombstoned keys; the incremental pre-hook deletes previously materialized matching target records. This is **not** an end-to-end source hard-delete solution: reliable event generation, certification, tombstone supersession on reinsertion, and recovery remain Phase 7 work.
+5. **Verification evidence:** user-reported `make test` passed after repairing dbt test-source database qualification and the test's role-separated `stg_orders` read. The disposable PostgreSQL integration test covers initial load, repeat execution, certified updates/backdated replay, and a registered tombstone. Do not extrapolate those assertions to all seven models or to production scheduling.
+
+**Remaining Phase 5 work**
+6. **Certification cursor hardening:** verify batches certified out of `(certified_at, batch_id)` order cannot be skipped; enforce/verify per-model execution serialization, concurrent cutoff semantics, and transaction safety. Test same-timestamp ties, empty batches, retries after failure, clean first runs, full refresh and cursor reset/realignment. A batch certified with a cursor tuple earlier than a committed checkpoint must be recovered, not silently ignored.
+7. **Source normalization and model contracts:** verify casts, trimming/casing, business grain, composite keys, source-version ordering, and deterministic `unique`/`not_null` contracts across all seven mutable models plus both reference models. Add dbt model contracts where compatible with the materializations, and preserve model names (`stg_order_payments`, `stg_order_reviews`, etc.).
+8. **Row-level rejection routing (Phase 5.3):** keep structurally valid but business-invalid current rows visible and flagged in staging; derive `quarantine.rejected_rows` from the **current certified staged version** rather than all historical raw versions. Filter invalid rows out of published marts in Phase 6. Preserve and adapt existing `find_rejected_rows`, `sync_rejected_rows`, and candidate models. The previous instruction to remove rejected rows from `stg_*` is superseded by this explicit staging/marts contract; it is a **design decision, not yet a verified implementation**.
+9. **Quality gates and idempotency:** use `unique`, `not_null`, `accepted_values`, applicable `relationships`, and singular quality tests. Run `dbt build` and repeated-run checks against disposable PostgreSQL for all models; compare incremental results with an independent full-state reconstruction, including updates, replays, and tombstones.
+10. **Airflow orchestration:** run dbt on `queue="batch"` with the isolated executable and writable `target`/`logs` paths, make failed tests block downstream publishing, and record dbt run/test outcomes. Do not assume an Airflow `transform` DAG has already passed end-to-end.
+
+**Deliverables:** nine `stg_*` models (seven incremental, two reference tables), per-model certification progress, shared business-key encoder, staging tests and source definitions, and tested reject routing to `quarantine.rejected_rows`.
+
+**Acceptance:** one row per business key in each current-state staging model; repeated certified-batch processing produces the same contents; out-of-order replays and tied/late certifications are not skipped; failed runs cannot advance progress; explicit tombstones remove the correct rows; certified current-state invalid records are flagged and recorded without entering published marts; all model-contract and disposable-DB integration tests pass. **Automatic creation/reversal of deletion tombstones remains Phase 7 acceptance, not Phase 5.**
 
 ---
 
@@ -566,7 +572,7 @@ Note: Phase 5 uses the isolated virtualenv inside the Airflow image, not a separ
 ### 5.3 Idempotency checklist
 - Extraction: deterministic batch ids; manifest written last.
 - Load: transactional delete-then-insert by `_batch_id`; unique `batch_registry` key.
-- Staging and marts: deterministic `unique_key` merges.
+- Staging: per-model certified-batch progress plus deterministic `unique_key` `merge` for seven mutable models, with snapshot-replacement tables for references; cursor advances after successful dbt operation. Marts: deterministic `unique_key` processing is planned and must independently handle upstream change propagation.
 - Landed checkpoint: advances only after durable Parquet + manifest publication and registry transaction. Certified checkpoint: advances only after Gate 2 and never skips an uncertified interval.
 - **Celery: retries, worker crashes, and broker redelivery can run any task twice, so every task is written to be safe to repeat.**
 - Test: run any interval twice and diff the results; automated in the integration suite.
@@ -680,7 +686,7 @@ New defects found by the fuzz job (Phase 8) are appended here with their ID, che
 | Tool capability or licensing changes (Soda, GE) | Rework of Gate 4 | Keep Soda checks simple; baselines and reconciliation in own code; verify early (5.4) |
 | Scope creep | Project never finishes | Build in phase order; the API and Grafana come after the gates are proven |
 | Olist natural inconsistencies produce false alarms | Noisy gates | Profile clean data first; calibrate thresholds from baselines; severity levels |
-| Over-engineered incremental logic | Hard-to-debug models | Start with `unique_key` + lookback; add complexity only when a test demands it |
+| Incremental cursor ordering or concurrent builds | Missing newly certified changes or corrupting checkpoints | Verify monotonic certification tuple / late certification handling, transaction boundaries, serialization, failure recovery and full-refresh equivalence in isolated integration tests |
 | Airflow version differences (2.x vs 3.x) | Broken DAG patterns | Pin the version; use the matching asset/dataset API; DAG import test in CI |
 | Reconciliation cost grows with data | Slow daily job | Bucketed hashes, drill down only on mismatch; fine at Olist scale |
 | **Object-store supply chain (upstream archived, fork maintained by one person)** | **Unpatched vulnerabilities, or the fork disappears** | **Pin by digest, monthly review, S3-generic code, exit plan to RustFS or SeaweedFS in an ADR (5.7)** |
@@ -698,7 +704,7 @@ The initial infrastructure, emulator, and seven-table extraction/certification p
 
 1. **Verify remote CI** for `.github/workflows/regression.yml`; confirm that the local `make test` suite runs with the same test isolation in GitHub Actions.
 2. **Finish DAG failure isolation testing:** inject a controlled failure into one mapped table in an isolated environment and prove the other table chains still certify successfully; preserve the production source.
-3. **Advance Phases 5–6:** complete and validate dbt staging, rejection handling, marts and the required contract tests. The presence of dbt files is not evidence of accepted models.
+3. **Advance Phases 5–6:** Phase 5.1 passed; Phase 5.2 certification-driven `merge` staging has a passing local integration path for `stg_orders`. Harden cursor edge cases across all seven models, then implement rejection handling, marts, and the required contract tests. The presence of dbt files is not evidence of accepted models.
 4. **Extend Phase 7:** integrate dbt/Soda gates and reconcile against downstream state, then add explicit repair/tombstone processing; retain the current continuous/full raw-state reconciliation as the tested foundation.
 5. **Complete Phases 8–12:** controlled defect matrix, serving API, observability, security/backup drills, final release CI and demonstration. Update the status table only with verified acceptance evidence.
 
