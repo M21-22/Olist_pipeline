@@ -1,0 +1,192 @@
+# Relationships warn on temporarily missing late-arriving source records.
+version: 2
+models:
+  - name: stg_customers
+    columns:
+      - name: customer_id
+        data_tests:
+          - not_null
+          - unique
+      - name: source_batch_id
+        data_tests:
+          - not_null
+      - name: is_valid
+        data_tests:
+          - not_null
+  - name: stg_orders
+    columns:
+      - name: order_id
+        data_tests:
+          - not_null
+          - unique
+      - name: source_batch_id
+        data_tests:
+          - not_null
+      - name: is_valid
+        data_tests:
+          - not_null
+      - name: order_status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - created
+                  - approved
+                  - invoiced
+                  - processing
+                  - shipped
+                  - delivered
+                  - canceled
+                  - unavailable
+              config:
+                where: is_valid = TRUE
+      - name: customer_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: '{{ ref(''stg_customers'') }}'
+                field: customer_id
+              config:
+                severity: warn
+                where: is_valid = TRUE
+  - name: stg_order_items
+    columns:
+      - name: item_pk
+        data_tests:
+          - not_null
+          - unique
+      - name: source_batch_id
+        data_tests:
+          - not_null
+      - name: is_valid
+        data_tests:
+          - not_null
+      - name: order_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: '{{ ref(''stg_orders'') }}'
+                field: order_id
+              config:
+                severity: warn
+                where: is_valid = TRUE
+      - name: product_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: '{{ ref(''stg_products'') }}'
+                field: product_id
+              config:
+                severity: warn
+                where: is_valid = TRUE
+      - name: seller_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: '{{ ref(''stg_sellers'') }}'
+                field: seller_id
+              config:
+                severity: warn
+                where: is_valid = TRUE
+  - name: stg_order_payments
+    columns:
+      - name: order_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: '{{ ref(''stg_orders'') }}'
+                field: order_id
+              config:
+                severity: warn
+                where: is_valid = TRUE
+      - name: payment_sequential
+        data_tests:
+          - not_null
+      - name: source_batch_id
+        data_tests:
+          - not_null
+      - name: is_valid
+        data_tests:
+          - not_null
+      - name: payment_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - credit_card
+                  - boleto
+                  - voucher
+                  - debit_card
+                  - not_defined
+              config:
+                where: is_valid = TRUE
+  - name: stg_order_reviews
+    columns:
+      - name: review_pk
+        data_tests:
+          - not_null
+          - unique
+      - name: source_batch_id
+        data_tests:
+          - not_null
+      - name: is_valid
+        data_tests:
+          - not_null
+      - name: order_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: '{{ ref(''stg_orders'') }}'
+                field: order_id
+              config:
+                severity: warn
+                where: is_valid = TRUE
+  - name: stg_products
+    columns:
+      - name: product_id
+        data_tests:
+          - not_null
+          - unique
+      - name: source_batch_id
+        data_tests:
+          - not_null
+      - name: is_valid
+        data_tests:
+          - not_null
+  - name: stg_sellers
+    columns:
+      - name: seller_id
+        data_tests:
+          - not_null
+          - unique
+      - name: source_batch_id
+        data_tests:
+          - not_null
+      - name: is_valid
+        data_tests:
+          - not_null
+  - name: stg_geolocation
+    columns:
+      - name: geolocation_pk
+        data_tests:
+          - not_null
+          - unique
+      - name: source_batch_id
+        data_tests:
+          - not_null
+      - name: is_valid
+        data_tests:
+          - not_null
+  - name: stg_product_category_translation
+    columns:
+      - name: product_category_name
+        data_tests:
+          - not_null
+          - unique
+      - name: source_batch_id
+        data_tests:
+          - not_null
+      - name: is_valid
+        data_tests:
+          - not_null
