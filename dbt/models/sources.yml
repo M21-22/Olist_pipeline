@@ -2,7 +2,6 @@ version: 2
 
 sources:
   - name: raw
-    database: warehouse
     schema: raw
     tables:
       - name: customers
@@ -15,7 +14,6 @@ sources:
       - name: geolocation
       - name: product_category_translation
   - name: audit
-    database: warehouse
     schema: audit
     tables:
       - name: batch_registry

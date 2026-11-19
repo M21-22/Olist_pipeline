@@ -31,6 +31,8 @@ ranked AS (
 )
 
 SELECT
+    src._batch_id AS source_batch_id,
+    {{ staging_is_valid('geolocation', 'src') }} AS is_valid,
     src.geolocation_pk,
     src.geolocation_zip_code_prefix,
     src.geolocation_lat,

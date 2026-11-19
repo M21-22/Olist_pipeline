@@ -31,7 +31,9 @@ ranked AS (
 )
 
 SELECT
+    src._batch_id AS source_batch_id,
+    {{ staging_is_valid('product_category_translation', 'src') }} AS is_valid,
     LOWER(TRIM(product_category_name)) AS product_category_name,
     TRIM(product_category_name_english) AS product_category_name_english
-FROM ranked
+FROM ranked AS src
 WHERE row_num = 1

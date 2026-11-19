@@ -1,4 +1,16 @@
-{{ config(materialized='table') }}
+{{ config(
+    unique_key='customer_id',
+    pre_hook=[
+        "{{ staging_lock() }}",
+        "{{ staging_prepare('customers') }}",
+        "{{ staging_capture_pending('customers') }}",
+        "{{ staging_delete_tombstoned('customers', ['target.customer_id']) }}"
+    ],
+    post_hook=[
+        "{{ staging_mark_processed('customers') }}",
+        "{{ staging_finalize() }}"
+    ]
+) }}
 
 WITH ranked AS (
     SELECT
@@ -17,9 +29,12 @@ WITH ranked AS (
             src._batch_id = registry.batch_id
             AND registry.table_name = 'customers'
             AND registry.status = 'CERTIFIED'
+    {{ staging_incremental_key_filter('customers', ['customer_id']) }}
 )
 
 SELECT
+    src._batch_id AS source_batch_id,
+    {{ staging_is_valid('customers', 'src') }} AS is_valid,
     src.customer_id,
     src.customer_unique_id,
     src.customer_zip_code_prefix,
@@ -34,5 +49,5 @@ WHERE
         FROM {{ source('audit', 'deleted_keys') }} AS deleted
         WHERE
             deleted.source_table = 'customers'
-            AND deleted.business_key = src.customer_id::TEXT
+            AND deleted.business_key = {{ encode_business_key(["src.customer_id"]) }}
     )

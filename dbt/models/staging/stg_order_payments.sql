@@ -1,4 +1,16 @@
-{{ config(materialized='table') }}
+{{ config(
+    unique_key=['order_id', 'payment_sequential'],
+    pre_hook=[
+        "{{ staging_lock() }}",
+        "{{ staging_prepare('order_payments') }}",
+        "{{ staging_capture_pending('order_payments') }}",
+        "{{ staging_delete_tombstoned('order_payments', ['target.order_id', 'target.payment_sequential']) }}"
+    ],
+    post_hook=[
+        "{{ staging_mark_processed('order_payments') }}",
+        "{{ staging_finalize() }}"
+    ]
+) }}
 
 WITH ranked AS (
     SELECT
@@ -17,9 +29,12 @@ WITH ranked AS (
             src._batch_id = registry.batch_id
             AND registry.table_name = 'order_payments'
             AND registry.status = 'CERTIFIED'
+    {{ staging_incremental_key_filter('order_payments', ['order_id', 'payment_sequential']) }}
 )
 
 SELECT
+    src._batch_id AS source_batch_id,
+    {{ staging_is_valid('order_payments', 'src') }} AS is_valid,
     src.order_id,
     src.payment_sequential,
     src.payment_installments,
@@ -34,8 +49,5 @@ WHERE
         FROM {{ source('audit', 'deleted_keys') }} AS deleted
         WHERE
             deleted.source_table = 'order_payments'
-            AND deleted.business_key = JSONB_BUILD_ARRAY(
-                src.order_id,
-                src.payment_sequential
-            )::TEXT
+            AND deleted.business_key = {{ encode_business_key(["src.order_id", "src.payment_sequential"]) }}
     )

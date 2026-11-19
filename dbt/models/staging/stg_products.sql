@@ -1,4 +1,16 @@
-{{ config(materialized='table') }}
+{{ config(
+    unique_key='product_id',
+    pre_hook=[
+        "{{ staging_lock() }}",
+        "{{ staging_prepare('products') }}",
+        "{{ staging_capture_pending('products') }}",
+        "{{ staging_delete_tombstoned('products', ['target.product_id']) }}"
+    ],
+    post_hook=[
+        "{{ staging_mark_processed('products') }}",
+        "{{ staging_finalize() }}"
+    ]
+) }}
 
 WITH ranked AS (
     SELECT
@@ -17,9 +29,12 @@ WITH ranked AS (
             src._batch_id = registry.batch_id
             AND registry.table_name = 'products'
             AND registry.status = 'CERTIFIED'
+    {{ staging_incremental_key_filter('products', ['product_id']) }}
 )
 
 SELECT
+    src._batch_id AS source_batch_id,
+    {{ staging_is_valid('products', 'src') }} AS is_valid,
     src.product_id,
     src.product_name_lenght,
     src.product_description_lenght,
@@ -38,5 +53,5 @@ WHERE
         FROM {{ source('audit', 'deleted_keys') }} AS deleted
         WHERE
             deleted.source_table = 'products'
-            AND deleted.business_key = src.product_id::TEXT
+            AND deleted.business_key = {{ encode_business_key(["src.product_id"]) }}
     )
