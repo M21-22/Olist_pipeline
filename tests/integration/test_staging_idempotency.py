@@ -57,9 +57,42 @@ def test_all_staging_models_repeat_without_data_changes(tmp_path: Path):
                 result['cursors'] = cur.fetchall()
         return result
 
+    def assert_provenance():
+        failures = []
+
+        with psycopg.connect(
+            host="test-db",
+            dbname="warehouse_test",
+            user="dbt_runner",
+            password=os.environ["DBT_RUNNER_PASSWORD"],
+        ) as conn:
+            with conn.cursor() as cur:
+                for model in TABLES:
+                    source_table = model.removeprefix("stg_")
+                    cur.execute(
+                        f"""
+                        SELECT s.source_batch_id, b.status, b.table_name
+                        FROM staging.{model} AS s
+                        LEFT JOIN audit.batch_registry AS b
+                            ON b.batch_id = s.source_batch_id
+                        AND b.table_name = %s
+                        AND b.status = 'CERTIFIED'
+                        WHERE b.batch_id IS NULL
+                        """,
+                        (source_table,),
+                    )
+                    failures.extend(
+                        (model, *row) for row in cur.fetchall()
+                    )
+
+        assert not failures, f"Uncertified staging rows: {failures}"
+
     invoke('run','--select','path:models/staging')
     before = snapshot()
     invoke('run','--select','path:models/staging')
     after = snapshot()
     assert before == after, 'Staging data/certification cursor changed without new batches'
+
+    assert_provenance()
+
     invoke('test','--select','path:models/staging','tag:staging_contract')

@@ -32,9 +32,6 @@ def test_continuous_reconciliation_detects_and_audits_source_deletion(monkeypatc
         with conn.cursor() as cur:
             cur.execute("DELETE FROM shop.customers")
             cur.execute("DELETE FROM raw.customers")
-            cur.execute("DELETE FROM audit.dq_results")
-            cur.execute("DELETE FROM audit.batch_registry")
-            cur.execute("DELETE FROM audit.landed_batches")
             cur.execute("DELETE FROM audit.certified_watermarks WHERE table_name='customers'")
             cur.execute("DELETE FROM audit.reconciliation WHERE table_name='customers'")
             cur.execute(
