@@ -3,7 +3,6 @@ CREATE SCHEMA IF NOT EXISTS raw;
 
 -- Transformation layer
 CREATE SCHEMA IF NOT EXISTS staging;
-CREATE SCHEMA IF NOT EXISTS snapshots;
 CREATE SCHEMA IF NOT EXISTS marts;
 
 -- Data quality and operations

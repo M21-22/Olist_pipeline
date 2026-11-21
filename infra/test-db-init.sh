@@ -6,10 +6,13 @@ CREATE ROLE etl_loader LOGIN PASSWORD 'ci_loader_only';
 CREATE ROLE olist_test_admin LOGIN PASSWORD 'ci_admin_only';
 CREATE ROLE dbt_runner LOGIN PASSWORD 'ci_dbt_only';
 CREATE ROLE soda_reader NOLOGIN;
+CREATE ROLE ingest_audit_writer NOLOGIN;
+CREATE ROLE grafana_reader NOLOGIN;
+CREATE ROLE api_reader NOLOGIN;
 CREATE DATABASE warehouse_test;
 SQL
 
-for file in 02-schemas.sql 03-raw.sql 04-audit.sql 05-quarantine.sql; do
+for file in 02-schemas.sql 03-raw.sql 04-audit.sql 05-quarantine.sql 06-grants.sql; do
   psql -v ON_ERROR_STOP=1 --username postgres --dbname warehouse_test \
     -f "/olist-ddl/$file"
 done
@@ -31,19 +34,12 @@ CREATE TABLE shop.customers (
     updated_at TIMESTAMPTZ NOT NULL
 );
 
-GRANT CONNECT ON DATABASE warehouse_test TO etl_loader, olist_test_admin, dbt_runner;
-GRANT TEMPORARY ON DATABASE warehouse_test TO dbt_runner;
-GRANT USAGE ON SCHEMA raw, audit, staging, quarantine TO dbt_runner;
-GRANT CREATE ON SCHEMA staging TO dbt_runner;
-GRANT SELECT ON ALL TABLES IN SCHEMA raw, audit TO dbt_runner;
-GRANT USAGE ON SCHEMA staging TO soda_reader;
+GRANT CONNECT ON DATABASE warehouse_test TO olist_test_admin;
 GRANT SELECT ON audit.dbt_staging_progress TO olist_test_admin;
 GRANT SELECT ON audit.dbt_staging_processed_batches TO olist_test_admin;
 GRANT INSERT, DELETE ON audit.deleted_keys TO olist_test_admin;
 GRANT USAGE ON SCHEMA quarantine TO olist_test_admin;
 GRANT SELECT ON quarantine.rejected_rows TO olist_test_admin;
-GRANT SELECT, INSERT ON quarantine.rejected_rows TO dbt_runner;
-GRANT USAGE ON ALL SEQUENCES IN SCHEMA quarantine TO dbt_runner;
 
 -- Loader permissions retained from the existing test contract.
 GRANT USAGE ON SCHEMA raw, audit TO etl_loader;

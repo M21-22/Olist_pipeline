@@ -1,7 +1,7 @@
 COMPOSE := docker compose -f infra/compose.yaml
 EMU := $(COMPOSE) --profile emulator run --rm -T emulator
 
-.PHONY: up down ps logs \
+.PHONY: up down ps logs warehouse-migrate-phase5 check5 \
         emulator-build emulator-profile emulator-migrate \
         emulator-seed emulator-backfill emulator-run \
         emulator-up emulator-down emulator-status \
@@ -19,6 +19,17 @@ ps:
 
 logs:
 	$(COMPOSE) logs -f
+
+# Phase 5 warehouse upgrade and verification
+warehouse-migrate-phase5:
+	$(COMPOSE) exec -T warehouse-db psql -X -v ON_ERROR_STOP=1 \
+	  -U postgres -d warehouse --single-transaction \
+	  -c "SELECT pg_advisory_xact_lock(hashtextextended('olist:warehouse:migrate:phase5', 0))" \
+	  -f /docker-entrypoint-initdb.d/07-dbt-staging-progress.sql \
+	  -f /docker-entrypoint-initdb.d/08-dbt-staging-processed-batches.sql
+
+check5:
+	bash scripts/check-phase5-runtime.sh
 
 # Emulator
 emulator-build:

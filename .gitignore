@@ -43,3 +43,4 @@ Thumbs.db
 docs/phase*.md
 project-state.json
 scripts.txt
+docs/dbt
