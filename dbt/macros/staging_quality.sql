@@ -1,24 +1,44 @@
 {# Quality checks are evaluated on CURRENT staged data, not all raw history.
    The same predicates feed the staging is_valid flag and rejection candidates.
-   NULL handling for required identifiers remains the Gate 1 responsibility. #}
+   Gate 1 enforces required batch identity; staging checks required business values. #}
 {% macro staging_quality_rules(table_name, a) %}
     {% set states = "('AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO')" %}
     {% if table_name == 'customers' %}
-        {{ return({'invalid_customer_state': a ~ '.customer_state IS NOT NULL AND UPPER(TRIM(' ~ a ~ '.customer_state)) NOT IN ' ~ states}) }}
+        {{ return({
+            'invalid_customer_state': a ~ '.customer_state IS NOT NULL AND UPPER(TRIM(' ~ a ~ '.customer_state)) NOT IN ' ~ states,
+            'missing_customer_unique_id': "NULLIF(BTRIM(" ~ a ~ ".customer_unique_id), '') IS NULL"
+        }) }}
     {% elif table_name == 'orders' %}
         {{ return({
+            'missing_order_status': "NULLIF(BTRIM(" ~ a ~ ".order_status), '') IS NULL",
+            'missing_purchase_timestamp': a ~ '.order_purchase_timestamp IS NULL',
             'unknown_order_status': a ~ ".order_status IS NOT NULL AND LOWER(TRIM(" ~ a ~ ".order_status)) NOT IN ('created','approved','invoiced','processing','shipped','delivered','canceled','unavailable')",
             'approved_before_purchase': a ~ '.order_approved_at < ' ~ a ~ '.order_purchase_timestamp',
             'delivered_before_purchase': a ~ '.order_delivered_customer_date < ' ~ a ~ '.order_purchase_timestamp',
             'delivered_before_carrier': a ~ '.order_delivered_customer_date < ' ~ a ~ '.order_delivered_carrier_date'
         }) }}
     {% elif table_name == 'order_items' %}
-        {{ return({'negative_price': a ~ '.price < 0', 'negative_freight': a ~ '.freight_value < 0'}) }}
+        {{ return({
+            'missing_price': a ~ '.price IS NULL',
+            'missing_freight_value': a ~ '.freight_value IS NULL',
+            'negative_price': a ~ '.price < 0',
+            'negative_freight': a ~ '.freight_value < 0'
+        }) }}
     {% elif table_name == 'order_payments' %}
-        {{ return({'negative_payment': a ~ '.payment_value < 0', 'invalid_installments': a ~ '.payment_installments < 0',
-            'unknown_payment_type': a ~ ".payment_type IS NOT NULL AND LOWER(TRIM(" ~ a ~ ".payment_type)) NOT IN ('credit_card','boleto','voucher','debit_card','not_defined')"}) }}
+        {{ return({
+            'missing_payment_value': a ~ '.payment_value IS NULL',
+            'missing_payment_type': "NULLIF(BTRIM(" ~ a ~ ".payment_type), '') IS NULL",
+            'negative_payment': a ~ '.payment_value < 0',
+            'invalid_installments': a ~ '.payment_installments < 0',
+            'unknown_payment_type': a ~ ".payment_type IS NOT NULL AND LOWER(TRIM(" ~ a ~ ".payment_type)) NOT IN ('credit_card','boleto','voucher','debit_card','not_defined')"
+        }) }}
     {% elif table_name == 'order_reviews' %}
-        {{ return({'invalid_review_score': a ~ '.review_score NOT BETWEEN 1 AND 5', 'answer_before_creation': a ~ '.review_answer_timestamp < ' ~ a ~ '.review_creation_date'}) }}
+        {{ return({
+            'missing_review_score': a ~ '.review_score IS NULL',
+            'missing_review_creation_date': a ~ '.review_creation_date IS NULL',
+            'invalid_review_score': a ~ '.review_score NOT BETWEEN 1 AND 5',
+            'answer_before_creation': a ~ '.review_answer_timestamp < ' ~ a ~ '.review_creation_date'
+        }) }}
     {% elif table_name == 'products' %}
         {{ return({
             'negative_product_weight': a ~ '.product_weight_g < 0',

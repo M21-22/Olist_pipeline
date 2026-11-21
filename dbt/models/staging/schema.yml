@@ -21,6 +21,10 @@ models:
           - not_null
       - name: customer_unique_id
         data_type: text
+        data_tests:
+          - not_null:
+              config:
+                where: is_valid IS TRUE
       - name: customer_zip_code_prefix
         data_type: text
       - name: updated_at

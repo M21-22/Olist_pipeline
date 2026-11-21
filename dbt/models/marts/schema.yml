@@ -1,37 +1,54 @@
-# Dimension contracts are preserved from the original dimension YAML files.
-# Fact contracts are not newly enforced until SQL output types are verified.
 version: 2
 models:
   - name: dim_customer
     description: Customer SCD2 dimension from valid purchases and their order-associated customer records,
       with an unknown member for unresolved references. Validity dates track purchase-observed geography.
+    config:
+      contract:
+        enforced: true
     columns:
       - name: customer_sk
+        data_type: text
         description: Deterministic purchase-time version identifier; a reserved hash for the unknown member.
         data_tests:
           - not_null
           - unique
       - name: customer_unique_id
+        data_type: text
         description: Stable person-level natural key, or the reserved unknown identifier.
         data_tests:
           - not_null
+          - relationships:
+              arguments:
+                to: "{{ ref('stg_customers') }}"
+                field: customer_unique_id
+              config:
+                where: is_inferred IS FALSE
       - name: representative_customer_id
+        data_type: text
         description: Order-associated source customer identifier selected for this version.
       - name: customer_zip_code_prefix
+        data_type: text
         description: Postal code prefix associated with the observed version.
       - name: customer_city
+        data_type: text
         description: Customer city at the observed version.
       - name: customer_state
+        data_type: text
         description: Customer state at the observed version.
       - name: valid_from
+        data_type: timestamp with time zone
         description: Purchase timestamp that begins this version, inclusive.
       - name: valid_to
+        data_type: timestamp with time zone
         description: Next geography change observed at purchase, exclusive; null means current.
       - name: is_current
+        data_type: boolean
         description: Whether this is the latest purchase-observed version.
         data_tests:
           - not_null
       - name: is_inferred
+        data_type: boolean
         description: True only for the unknown placeholder member.
         data_tests:
           - not_null
@@ -227,212 +244,289 @@ models:
   - name: fct_orders
     description: One current valid source order per order_id; amounts and counts aggregate current valid payment/item
       rows. The customer key identifies the version effective at purchase.
+    config:
+      contract:
+        enforced: true
     columns:
       - name: order_sk
+        data_type: text
         description: Deterministic hashed surrogate key of the order.
         data_tests:
           - not_null
           - unique
       - name: order_id
+        data_type: text
         description: Operational order identifier and fact grain.
         data_tests:
           - not_null
           - unique
       - name: customer_id
+        data_type: text
         description: Order-associated customer record ID; not the person-level natural key.
       - name: customer_unique_id
+        data_type: text
         description: Person-level customer identifier, if a valid customer lookup is available.
       - name: customer_sk
+        data_type: text
         description: Customer version effective at purchase, or unknown.
         data_tests:
           - not_null
       - name: customer_geography_sk
+        data_type: text
         description: Geography key from the order customer record ZIP prefix, or unknown.
         data_tests:
           - not_null
       - name: purchase_date_sk
+        data_type: integer
         description: UTC calendar date key for order purchase; zero denotes unknown.
         data_tests:
           - not_null
       - name: order_status
+        data_type: text
         description: Latest valid order status.
       - name: purchased_at
+        data_type: timestamp with time zone
         description: Order purchase timestamp.
       - name: approved_at
+        data_type: timestamp with time zone
         description: Order approval timestamp.
       - name: delivered_to_carrier_at
+        data_type: timestamp with time zone
         description: Carrier handover timestamp.
       - name: delivered_to_customer_at
+        data_type: timestamp with time zone
         description: Customer delivery timestamp.
       - name: estimated_delivery_at
+        data_type: timestamp with time zone
         description: Estimated delivery timestamp.
       - name: delivery_delay_days
+        data_type: numeric
         description: Actual delivery time minus estimated delivery time, in fractional days.
       - name: item_count
+        data_type: integer
         description: Count of current valid order items.
         data_tests:
           - not_null
       - name: item_price_total
+        data_type: numeric(14, 2)
         description: Sum of valid item prices for this order.
         data_tests:
           - not_null
       - name: freight_total
+        data_type: numeric(14, 2)
         description: Sum of valid item freight values for this order.
         data_tests:
           - not_null
       - name: payment_count
+        data_type: integer
         description: Count of current valid order payments.
         data_tests:
           - not_null
       - name: payment_total
+        data_type: numeric(14, 2)
         description: Sum of valid payment values for this order.
         data_tests:
           - not_null
       - name: source_updated_at
+        data_type: timestamp with time zone
         description: Latest source update timestamp of the order.
       - name: source_batch_id
+        data_type: text
         description: Certified source batch supplying the current order winner.
       - name: row_fingerprint
+        data_type: text
         description: Hash of the projected fact attributes used to detect changed output rows.
         data_tests:
           - not_null
   - name: fct_order_items
     description: One current valid order item per item_pk; order_item_id is only an ordinal within an order.
       Unresolved dimension references map to reserved unknown keys.
+    config:
+      contract:
+        enforced: true
     columns:
       - name: item_pk
+        data_type: bigint
         description: Operational stable order-item identifier and fact grain.
         data_tests:
           - not_null
           - unique
       - name: order_item_sk
+        data_type: text
         description: Deterministic hash key of item_pk.
         data_tests:
           - not_null
           - unique
       - name: order_id
+        data_type: text
         description: Parent operational order identifier.
       - name: order_item_id
+        data_type: integer
         description: Item ordinal inside the order; not globally unique.
       - name: product_id
+        data_type: text
         description: Source product identifier.
       - name: seller_id
+        data_type: text
         description: Source seller identifier.
       - name: product_sk
+        data_type: text
         description: Product dimension key or unknown.
         data_tests:
           - not_null
       - name: seller_sk
+        data_type: text
         description: Seller dimension key or unknown.
         data_tests:
           - not_null
       - name: seller_geography_sk
+        data_type: text
         description: Geography derived from the current seller ZIP prefix, or unknown.
         data_tests:
           - not_null
       - name: purchase_date_sk
+        data_type: integer
         description: UTC purchase calendar date key from the associated valid order, or zero.
         data_tests:
           - not_null
       - name: customer_sk
+        data_type: text
         description: Customer version effective at the parent order purchase, or unknown.
         data_tests:
           - not_null
       - name: shipping_limit_at
+        data_type: timestamp with time zone
         description: Shipping deadline of the item.
       - name: price
+        data_type: numeric(12, 2)
         description: Current valid item price.
       - name: freight_value
+        data_type: numeric(12, 2)
         description: Current valid freight amount.
       - name: gross_item_amount
+        data_type: numeric(14, 2)
         description: Price plus freight for this item.
       - name: source_updated_at
+        data_type: timestamp with time zone
         description: Latest source update timestamp of the item.
       - name: source_batch_id
+        data_type: text
         description: Certified source batch supplying the current item winner.
       - name: row_fingerprint
+        data_type: text
         description: Hash of projected attributes used for change detection.
         data_tests:
           - not_null
   - name: fct_payments
     description: One current valid payment per (order_id, payment_sequential); payment_sk is a deterministic
       identifier for that composite grain.
+    config:
+      contract:
+        enforced: true
     columns:
       - name: payment_sk
+        data_type: text
         description: Deterministic hash of order_id and payment_sequential.
         data_tests:
           - not_null
           - unique
       - name: order_id
+        data_type: text
         description: Operational parent order identifier; part of the composite grain.
         data_tests:
           - not_null
       - name: payment_sequential
+        data_type: integer
         description: Payment sequence within an order; part of the composite grain.
         data_tests:
           - not_null
       - name: payment_type
+        data_type: text
         description: Payment method as recorded in source.
       - name: payment_installments
+        data_type: integer
         description: Number of payment installments.
       - name: payment_value
+        data_type: numeric(12, 2)
         description: Current valid payment amount.
       - name: purchase_date_sk
+        data_type: integer
         description: UTC purchase date of the associated valid order, or zero.
         data_tests:
           - not_null
       - name: customer_sk
+        data_type: text
         description: Currently observed SCD2 customer version key, or unknown.
         data_tests:
           - not_null
       - name: source_updated_at
+        data_type: timestamp with time zone
         description: Latest source update timestamp of the payment.
       - name: source_batch_id
+        data_type: text
         description: Certified source batch supplying the current payment winner.
       - name: row_fingerprint
+        data_type: text
         description: Hash of projected attributes used for change detection.
         data_tests:
           - not_null
   - name: fct_reviews
     description: One current valid source review per review_pk; review_id is not guaranteed to be unique.
+    config:
+      contract:
+        enforced: true
     columns:
       - name: review_pk
+        data_type: bigint
         description: Operational stable review-row identifier and fact grain.
         data_tests:
           - not_null
           - unique
       - name: review_sk
+        data_type: text
         description: Deterministic hash key of review_pk.
         data_tests:
           - not_null
           - unique
       - name: review_id
+        data_type: text
         description: Source review identifier, not necessarily unique.
       - name: order_id
+        data_type: text
         description: Operational order identifier associated with the review.
       - name: review_score
+        data_type: integer
         description: Customer review score.
       - name: review_created_at
+        data_type: timestamp with time zone
         description: Review creation timestamp.
       - name: review_answered_at
+        data_type: timestamp with time zone
         description: Timestamp when the review was answered.
       - name: review_comment_title
+        data_type: text
         description: Review title text, if present.
       - name: review_comment_message
+        data_type: text
         description: Review message text, if present.
       - name: review_date_sk
+        data_type: integer
         description: UTC review creation date key, or zero.
         data_tests:
           - not_null
       - name: customer_sk
+        data_type: text
         description: Customer version effective at the parent order purchase, or unknown.
         data_tests:
           - not_null
       - name: source_updated_at
+        data_type: timestamp with time zone
         description: Latest source update timestamp of the review.
       - name: source_batch_id
+        data_type: text
         description: Certified source batch supplying the current review winner.
       - name: row_fingerprint
+        data_type: text
         description: Hash of projected attributes used for change detection.
         data_tests:
           - not_null

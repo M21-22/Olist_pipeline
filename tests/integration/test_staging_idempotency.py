@@ -89,6 +89,9 @@ def test_all_staging_models_repeat_without_data_changes(tmp_path: Path):
 
     invoke('run','--select','path:models/staging')
     before = snapshot()
+    assert any(before[table] for table in TABLES), (
+        "Idempotency test has no staged records to compare"
+    )
     invoke('run','--select','path:models/staging')
     after = snapshot()
     assert before == after, 'Staging data/certification cursor changed without new batches'

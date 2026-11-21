@@ -1,0 +1,175 @@
+version: 2
+models:
+  - name: orders
+    description: >-
+      Public order lookup and filtering contract. Customer state is derived
+      from the SCD2 customer version effective at the order's purchase timestamp.
+      Order-level amounts avoid joining items to payments and multiplying totals.
+    columns:
+      - name: order_id
+        description: Public order lookup identifier.
+        data_tests: [not_null, unique]
+      - name: order_status
+        description: Latest validated order status.
+      - name: purchased_at
+        description: Order purchase timestamp.
+      - name: approved_at
+        description: Order approval timestamp.
+      - name: delivered_to_carrier_at
+        description: Carrier handoff timestamp.
+      - name: delivered_to_customer_at
+        description: Customer delivery timestamp.
+      - name: estimated_delivery_at
+        description: Estimated delivery timestamp.
+      - name: delivery_delay_days
+        description: Signed actual-minus-estimated delay in days.
+      - name: item_count
+        description: Number of valid current order items.
+      - name: item_price_total
+        description: Valid item price total, excluding freight.
+      - name: freight_total
+        description: Valid freight total.
+      - name: payment_count
+        description: Number of valid current payments.
+      - name: payment_total
+        description: Valid current payment total.
+      - name: purchase_date_sk
+        description: UTC purchase date key, or zero for unknown.
+      - name: customer_state
+        description: Currently observed customer state; historical attribution is not guaranteed.
+      - name: average_review_score
+        description: Mean review score for this order, or null.
+      - name: scored_review_count
+        description: Number of reviews with scores.
+  - name: order_items
+    description: Individual current valid order items for an order-detail response.
+    columns:
+      - name: order_id
+        description: Parent order identifier.
+        data_tests: [not_null]
+      - name: order_item_id
+        description: Line ordinal within the order.
+      - name: product_id
+        description: Product identifier.
+      - name: seller_id
+        description: Seller identifier.
+      - name: category_name
+        description: Current original-language product category.
+      - name: category_name_english
+        description: Current translated product category, when available.
+      - name: price
+        description: Item price excluding freight.
+      - name: freight_value
+        description: Item freight amount.
+      - name: gross_item_amount
+        description: Item price plus freight.
+      - name: shipping_limit_at
+        description: Shipping deadline timestamp.
+  - name: seller_delivery_performance
+    description: >-
+      Per-seller daily delivery performance. Region is based on the seller's
+      current Type 1 attributes; alert thresholds are exploratory baselines.
+    columns:
+      - name: seller_id
+        description: Seller identifier.
+        data_tests: [not_null]
+      - name: seller_state
+        description: Currently known seller state.
+      - name: delivery_date
+        description: UTC customer delivery date.
+        data_tests: [not_null]
+      - name: delivered_order_count
+        description: Distinct delivered seller-order pairs.
+      - name: late_order_count
+        description: Delivered seller-order pairs after estimate.
+      - name: late_delivery_rate
+        description: Late divided by delivered.
+      - name: avg_delay_days
+        description: Mean delivery delay in fractional days.
+      - name: baseline_order_count
+        description: Prior 30-calendar-day sample count.
+      - name: baseline_mean_delay_days
+        description: Previous 30-day mean delivery delay.
+      - name: baseline_stddev_delay_days
+        description: Historical delay standard deviation.
+      - name: delay_z_score
+        description: Standardized deviation; null when baseline insufficient.
+      - name: is_sla_alert
+        description: Exploratory delivery delay alert flag.
+        data_tests: [not_null]
+  - name: sla_alerts
+    description: Only seller-day observations flagged by the seller delivery SLA mart.
+    columns:
+      - name: seller_id
+        description: Seller identifier.
+        data_tests: [not_null]
+      - name: seller_state
+        description: Current seller region.
+      - name: delivery_date
+        description: UTC customer delivery date.
+        data_tests: [not_null]
+      - name: delivered_order_count
+        description: Delivered seller-order pairs.
+      - name: late_order_count
+        description: Late seller-order pairs.
+      - name: late_delivery_rate
+        description: Late fraction.
+      - name: avg_delay_days
+        description: Daily mean delay in days.
+      - name: baseline_order_count
+        description: Number of baseline orders.
+      - name: baseline_mean_delay_days
+        description: Baseline mean delay.
+      - name: baseline_stddev_delay_days
+        description: Baseline standard deviation.
+      - name: delay_z_score
+        description: Standardized delivery delay statistic.
+  - name: daily_kpis
+    description: Daily business KPI view by UTC order purchase date.
+    columns:
+      - name: purchase_date_sk
+        description: UTC purchase date key.
+        data_tests: [not_null, unique]
+      - name: purchase_date
+        description: UTC purchase date, or null for unknown.
+      - name: order_count
+        description: All orders purchased on this date.
+      - name: delivered_order_count
+        description: Orders currently delivered.
+      - name: canceled_order_count
+        description: Orders currently canceled.
+      - name: cancellation_rate
+        description: Canceled order share.
+      - name: gmv
+        description: Non-canceled and available item prices excluding freight.
+      - name: item_price_total
+        description: All valid item prices regardless of status.
+      - name: freight_total
+        description: All valid freight totals.
+      - name: payment_total
+        description: All valid payment totals.
+      - name: item_count
+        description: Valid order items.
+      - name: payment_count
+        description: Valid order payments.
+      - name: reviewed_order_count
+        description: Orders with scored reviews.
+      - name: avg_review_score
+        description: Average of order-level mean review scores.
+  - name: categories_summary
+    description: >-
+      Current product-category summary excluding canceled/unavailable orders.
+      GMV is valid item price, excluding freight. Category labels use current
+      product Type 1 data and translation where available.
+    columns:
+      - name: category
+        description: English category name, otherwise source category or Unknown.
+        data_tests: [not_null, unique]
+      - name: item_count
+        description: Included valid order-item count.
+      - name: order_count
+        description: Distinct included orders containing items in this category.
+      - name: gmv
+        description: Item-price GMV excluding freight.
+      - name: freight_total
+        description: Included item freight sum.

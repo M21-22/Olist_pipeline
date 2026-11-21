@@ -1,4 +1,4 @@
-"""Build the customer snapshot, dimensional marts, and API contract views.
+"""Build the dimensional marts and API contract views.
 
 Run after a successful transform_staging DAG. Deliberately manual until the
 end-to-end publishing policy is introduced; avoid serving partially validated
@@ -33,18 +33,6 @@ DBT_ARGS = (
     tags=["olist", "dbt", "marts", "api"],
 )
 def transform_marts():
-    snapshot = BashOperator(
-        task_id="snapshot_customer_history",
-        bash_command=(
-            f"set -euo pipefail; {DBT} snapshot {DBT_ARGS} "
-            "--select customer_history"
-        ),
-        queue="batch",
-        retries=1,
-        retry_delay=timedelta(minutes=1),
-        execution_timeout=timedelta(minutes=20),
-    )
-
     build = BashOperator(
         task_id="build_marts_and_api",
         bash_command=(
@@ -70,7 +58,7 @@ def transform_marts():
         execution_timeout=timedelta(minutes=30),
     )
 
-    snapshot >> build >> validate
+    build >> validate
 
 
 transform_marts()

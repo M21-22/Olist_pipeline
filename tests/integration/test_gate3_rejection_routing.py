@@ -83,13 +83,14 @@ def test_rejection_routes_current_version_and_correction(tmp_path: Path):
             cur.execute(
                 """
                 INSERT INTO raw.orders
-                    (order_id, order_status, updated_at,
+                    (order_id, order_status, order_purchase_timestamp, updated_at,
                     _batch_id, _source_file, _row_hash)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     order_id,
                     status,
+                    t,
                     source_updated_at,
                     batch,
                     batch + ".parquet",

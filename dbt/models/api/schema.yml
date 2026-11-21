@@ -2,9 +2,12 @@ version: 2
 models:
   - name: orders
     description: >-
-      Public order lookup and filtering contract. Customer state is the most
-      recently observed customer version, not the location at purchase time.
+      Public order lookup and filtering contract. Customer state is derived
+      from the SCD2 customer version effective at the order's purchase timestamp.
       Order-level amounts avoid joining items to payments and multiplying totals.
+    config:
+      contract:
+        enforced: true
     columns:
       - name: order_id
         description: Public order lookup identifier.
@@ -36,13 +39,16 @@ models:
       - name: purchase_date_sk
         description: UTC purchase date key, or zero for unknown.
       - name: customer_state
-        description: Currently observed customer state; historical attribution is not guaranteed.
+        description: Customer state of the version effective at order purchase.
       - name: average_review_score
         description: Mean review score for this order, or null.
       - name: scored_review_count
         description: Number of reviews with scores.
   - name: order_items
     description: Individual current valid order items for an order-detail response.
+    config:
+      contract:
+        enforced: true
     columns:
       - name: order_id
         description: Parent order identifier.
@@ -69,6 +75,9 @@ models:
     description: >-
       Per-seller daily delivery performance. Region is based on the seller's
       current Type 1 attributes; alert thresholds are exploratory baselines.
+    config:
+      contract:
+        enforced: true
     columns:
       - name: seller_id
         description: Seller identifier.
@@ -99,6 +108,9 @@ models:
         data_tests: [not_null]
   - name: sla_alerts
     description: Only seller-day observations flagged by the seller delivery SLA mart.
+    config:
+      contract:
+        enforced: true
     columns:
       - name: seller_id
         description: Seller identifier.
@@ -126,6 +138,9 @@ models:
         description: Standardized delivery delay statistic.
   - name: daily_kpis
     description: Daily business KPI view by UTC order purchase date.
+    config:
+      contract:
+        enforced: true
     columns:
       - name: purchase_date_sk
         description: UTC purchase date key.
@@ -161,6 +176,9 @@ models:
       Current product-category summary excluding canceled/unavailable orders.
       GMV is valid item price, excluding freight. Category labels use current
       product Type 1 data and translation where available.
+    config:
+      contract:
+        enforced: true
     columns:
       - name: category
         description: English category name, otherwise source category or Unknown.

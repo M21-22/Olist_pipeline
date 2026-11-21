@@ -5,36 +5,53 @@ models:
       Daily order cohort KPIs keyed by the UTC purchase date. GMV sums valid item
       prices, excluding freight and canceled/unavailable orders; payments are
       a separate accounting measure. Review score is order-weighted.
+    config:
+      contract:
+        enforced: true
     columns:
       - name: purchase_date_sk
+        data_type: integer
         description: UTC purchase date key; zero is the unknown date.
         data_tests: [not_null, unique]
       - name: purchase_date
+        data_type: date
         description: UTC purchase calendar date, or null for unknown date.
       - name: order_count
+        data_type: bigint
         description: Number of orders purchased on this date, regardless of current status.
         data_tests: [not_null]
       - name: delivered_order_count
+        data_type: bigint
         description: Orders currently marked delivered.
       - name: canceled_order_count
+        data_type: bigint
         description: Orders currently marked canceled.
       - name: cancellation_rate
+        data_type: numeric(12, 6)
         description: Canceled orders divided by all orders in purchase-date cohort.
       - name: gmv
+        data_type: numeric(18, 2)
         description: Current non-canceled, non-unavailable order item prices, excluding freight.
       - name: item_price_total
+        data_type: numeric(18, 2)
         description: Item prices across all orders, including canceled and unavailable.
       - name: freight_total
+        data_type: numeric(18, 2)
         description: Freight across all orders.
       - name: payment_total
+        data_type: numeric(18, 2)
         description: Valid payment amounts across all orders.
       - name: item_count
+        data_type: bigint
         description: Valid items associated with the orders.
       - name: payment_count
+        data_type: bigint
         description: Valid payments associated with the orders.
       - name: reviewed_order_count
+        data_type: bigint
         description: Orders with at least one scored valid review.
       - name: avg_review_score
+        data_type: numeric(8, 4)
         description: Mean of per-order review means, so each reviewed order has equal weight.
   - name: mart_seller_delivery_sla
     description: >-
@@ -44,38 +61,55 @@ models:
       Seller region is current Type 1 geography, not region at historical sale time.
       Alerts require at least 10 baseline orders by default, nonzero baseline
       standard deviation, z-score above 2 and positive current-day mean delay.
+    config:
+      contract:
+        enforced: true
     columns:
       - name: seller_id
+        data_type: text
         description: Seller business identifier.
         data_tests: [not_null]
       - name: seller_sk
+        data_type: text
         description: Current seller dimension key, or unknown.
         data_tests: [not_null]
       - name: seller_state
+        data_type: text
         description: Currently known seller state, or Unknown.
         data_tests: [not_null]
       - name: seller_geography_sk
+        data_type: text
         description: Current seller ZIP-prefix geography key, or unknown.
         data_tests: [not_null]
       - name: delivery_date
+        data_type: date
         description: UTC delivery completion day.
         data_tests: [not_null]
       - name: delivered_order_count
+        data_type: bigint
         description: Distinct seller-order pairs delivered on the date.
       - name: late_order_count
+        data_type: bigint
         description: Delivered seller-order pairs later than the estimated date.
       - name: late_delivery_rate
+        data_type: numeric(12, 6)
         description: Fraction of delivered orders arriving late.
       - name: avg_delay_days
+        data_type: numeric(14, 4)
         description: Mean actual minus estimated delivery time in days; negative means early.
       - name: baseline_order_count
+        data_type: bigint
         description: Number of delivered seller-order pairs in the prior 30 days.
       - name: baseline_mean_delay_days
+        data_type: numeric(14, 4)
         description: Order-weighted baseline mean delay.
       - name: baseline_stddev_delay_days
+        data_type: numeric(14, 4)
         description: Sample standard deviation of individual order delays within the baseline.
       - name: delay_z_score
+        data_type: numeric(14, 4)
         description: Current-day mean delay minus historical mean, divided by historical standard deviation; null if insufficient baseline.
       - name: is_sla_alert
+        data_type: boolean
         description: True when an eligible seller has a positive delay and z-score exceeds threshold.
         data_tests: [not_null]

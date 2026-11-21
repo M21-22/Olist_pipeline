@@ -1,5 +1,5 @@
--- Stable order lookup/list contract. Customer geography is the currently
--- observed location, not a reconstructed location at historical purchase time.
+-- Stable order lookup/list contract. Customer state is resolved from the
+-- purchase-time customer SCD2 version via the fact customer key.
 WITH review_summary AS (
     SELECT
         order_id,
