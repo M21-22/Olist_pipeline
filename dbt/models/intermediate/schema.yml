@@ -1,0 +1,16 @@
+version: 2
+
+models:
+  - name: int_customer_current
+    description: >-
+      Most recently updated valid customer record for each customer_unique_id.
+      A source customer_id identifies an order-specific customer record and is not
+      the person-level dimension key.
+    columns:
+      - name: customer_unique_id
+        data_tests:
+          - not_null
+          - unique
+      - name: representative_customer_id
+        data_tests:
+          - not_null

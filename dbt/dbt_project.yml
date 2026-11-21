@@ -3,7 +3,6 @@ version: '1.0.0'
 config-version: 2
 profile: olist
 model-paths: [models]
-snapshot-paths: [snapshots]
 macro-paths: [macros]
 
 flags:
@@ -31,9 +30,3 @@ models:
       +materialized: view
       +grants:
         select: [api_reader, grafana_reader]
-
-snapshots:
-  olist:
-    +schema: snapshots
-    +grants:
-      select: [soda_reader]

@@ -1,0 +1,28 @@
+# Replaces tests/assert_dim_geography_representative.sql, which re-implemented the
+# whole model over the full 1M-row table. Fixtures prove the rules in milliseconds.
+# Run in CI: dbt test --select test_type:unit   (excluded from the production DAG).
+version: 2
+
+unit_tests:
+  - name: dim_geography_selects_modal_location_and_matching_coordinates
+    model: dim_geography
+    given:
+      - input: ref('stg_geolocation')
+        rows:
+          # 01001: modal city/state wins; coordinates average ONLY its own samples.
+          - {is_valid: true, geolocation_zip_code_prefix: '01001', geolocation_city: 'Sao Paulo', geolocation_state: 'SP', geolocation_lat: -23.0, geolocation_lng: -46.0}
+          - {is_valid: true, geolocation_zip_code_prefix: '01001', geolocation_city: 'Sao Paulo', geolocation_state: 'SP', geolocation_lat: -24.0, geolocation_lng: -47.0}
+          - {is_valid: true, geolocation_zip_code_prefix: '01001', geolocation_city: 'Sao Paulo Typo', geolocation_state: 'SP', geolocation_lat: 10.0, geolocation_lng: 10.0}
+          # 02002: tie on sample count -> state ascending (RJ before SP).
+          - {is_valid: true, geolocation_zip_code_prefix: '02002', geolocation_city: 'Niteroi', geolocation_state: 'SP', geolocation_lat: -22.0, geolocation_lng: -43.0}
+          - {is_valid: true, geolocation_zip_code_prefix: '02002', geolocation_city: 'Niteroi', geolocation_state: 'RJ', geolocation_lat: -22.5, geolocation_lng: -43.5}
+          # 03003: no coordinates -> row kept, zero coordinate samples.
+          - {is_valid: true, geolocation_zip_code_prefix: '03003', geolocation_city: 'Recife', geolocation_state: 'PE', geolocation_lat: null, geolocation_lng: null}
+          # 04004: only an invalid sample -> no dimension row.
+          - {is_valid: false, geolocation_zip_code_prefix: '04004', geolocation_city: 'Bad', geolocation_state: 'XX', geolocation_lat: 1.0, geolocation_lng: 1.0}
+    expect:
+      rows:
+        - {zip_code_prefix: '01001', city: 'Sao Paulo', state: 'SP', latitude: -23.5, longitude: -46.5, coordinate_samples: 2, is_inferred: false}
+        - {zip_code_prefix: '02002', city: 'Niteroi', state: 'RJ', latitude: -22.5, longitude: -43.5, coordinate_samples: 1, is_inferred: false}
+        - {zip_code_prefix: '03003', city: 'Recife', state: 'PE', latitude: null, longitude: null, coordinate_samples: 0, is_inferred: false}
+        - {zip_code_prefix: '__unknown__', city: 'Unknown', state: null, latitude: null, longitude: null, coordinate_samples: 0, is_inferred: true}
