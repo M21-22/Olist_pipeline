@@ -86,7 +86,7 @@ jobs:
               # dbt unit-test compilation introspects direct upstream relation
               # columns, even though the test runs with mocked fixture rows.
               # Create the input relation with its schema and zero data.
-              "$DBT" run $DBT_ARGS --select stg_geolocation --empty
+              "$DBT" run $DBT_ARGS --select stg_geolocation
               "$DBT" test $DBT_ARGS --select test_type:unit
             '
 
