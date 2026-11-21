@@ -19,14 +19,81 @@ on:
       - '.vscode/**'
       - 'LICENSE'
       - 'NOTICE'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regression-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   regression:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    name: Disposable PostgreSQL, S3 and dbt regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Build and run against disposable test database
-        run: make test
-      - name: Clean test stack
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify Docker Compose and test configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker version
+          docker compose version
+          docker compose -f infra/compose.test.yaml config --quiet
+          test -f infra/test-db-init.sh
+          test -f infra/postgres/warehouse-init/08-dbt-staging-processed-batches.sql
+          test -f dbt/dbt_project.yml
+
+      - name: Run complete isolated regression suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          make test
+
+      - name: Validate dbt project and execute fixture-based unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The main pytest target tears down its disposable infrastructure.
+          docker compose -f infra/compose.test.yaml up -d --wait test-db test-s3
+          docker compose -f infra/compose.test.yaml run --rm \
+            --entrypoint bash test-runner -ec '
+              set -euo pipefail
+              mkdir -p /tmp/olist-ci-dbt-profile
+              cat > /tmp/olist-ci-dbt-profile/profiles.yml <<"YAML"
+          olist:
+            target: ci
+            outputs:
+              ci:
+                type: postgres
+                host: test-db
+                port: 5432
+                dbname: warehouse_test
+                user: dbt_runner
+                password: "{{ env_var('"'"'DBT_RUNNER_PASSWORD'"'"') }}"
+                schema: staging
+                threads: 2
+          YAML
+              DBT=/home/airflow/dbt-venv/bin/dbt
+              DBT_ARGS="--project-dir /opt/airflow/dbt --profiles-dir /tmp/olist-ci-dbt-profile --target-path /tmp/olist-ci-dbt-target --log-path /tmp/olist-ci-dbt-logs"
+              "$DBT" parse $DBT_ARGS
+              "$DBT" test $DBT_ARGS --select test_type:unit
+            '
+
+      - name: Show service logs if tests fail
+        if: failure()
+        shell: bash
+        run: |
+          docker compose -f infra/compose.test.yaml ps -a || true
+          docker compose -f infra/compose.test.yaml logs --no-color --tail=250 test-db test-s3 || true
+
+      - name: Remove disposable test resources
         if: always()
-        run: make test-clean
+        shell: bash
+        run: |
+          docker compose -f infra/compose.test.yaml down -v --remove-orphans || true
