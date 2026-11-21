@@ -19,6 +19,7 @@ on:
       - '.vscode/**'
       - 'LICENSE'
       - 'NOTICE'
+
   workflow_dispatch:
 
 permissions:
@@ -82,6 +83,10 @@ jobs:
               DBT=/home/airflow/dbt-venv/bin/dbt
               DBT_ARGS="--project-dir /opt/airflow/dbt --profiles-dir /tmp/olist-ci-dbt-profile --target-path /tmp/olist-ci-dbt-target --log-path /tmp/olist-ci-dbt-logs"
               "$DBT" parse $DBT_ARGS
+              # dbt unit-test compilation introspects direct upstream relation
+              # columns, even though the test runs with mocked fixture rows.
+              # Create the input relation with its schema and zero data.
+              "$DBT" run $DBT_ARGS --select stg_geolocation --empty
               "$DBT" test $DBT_ARGS --select test_type:unit
             '
 
