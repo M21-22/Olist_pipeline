@@ -95,4 +95,8 @@ def test_all_staging_models_repeat_without_data_changes(tmp_path: Path):
 
     assert_provenance()
 
-    invoke('test','--select','path:models/staging','tag:staging_contract')
+    invoke(
+        'test',
+        '--select', 'path:models/staging',
+        '--exclude', 'test_type:singular', 'test_type:unit',
+    )

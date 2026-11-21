@@ -2,30 +2,53 @@
 version: 2
 models:
   - name: stg_customers
+    config:
+      contract:
+        enforced: true
     columns:
       - name: customer_id
+        data_type: text
         data_tests:
           - not_null
           - unique
       - name: source_batch_id
+        data_type: text
         data_tests:
           - not_null
       - name: is_valid
+        data_type: boolean
         data_tests:
           - not_null
+      - name: customer_unique_id
+        data_type: text
+      - name: customer_zip_code_prefix
+        data_type: text
+      - name: updated_at
+        data_type: timestamp with time zone
+      - name: customer_city
+        data_type: text
+      - name: customer_state
+        data_type: text
   - name: stg_orders
+    config:
+      contract:
+        enforced: true
     columns:
       - name: order_id
+        data_type: text
         data_tests:
           - not_null
           - unique
       - name: source_batch_id
+        data_type: text
         data_tests:
           - not_null
       - name: is_valid
+        data_type: boolean
         data_tests:
           - not_null
       - name: order_status
+        data_type: text
         data_tests:
           - accepted_values:
               arguments:
@@ -41,6 +64,7 @@ models:
               config:
                 where: is_valid = TRUE
       - name: customer_id
+        data_type: text
         data_tests:
           - relationships:
               arguments:
@@ -49,19 +73,38 @@ models:
               config:
                 severity: warn
                 where: is_valid = TRUE
+      - name: order_purchase_timestamp
+        data_type: timestamp with time zone
+      - name: order_approved_at
+        data_type: timestamp with time zone
+      - name: order_delivered_carrier_date
+        data_type: timestamp with time zone
+      - name: order_delivered_customer_date
+        data_type: timestamp with time zone
+      - name: order_estimated_delivery_date
+        data_type: timestamp with time zone
+      - name: updated_at
+        data_type: timestamp with time zone
   - name: stg_order_items
+    config:
+      contract:
+        enforced: true
     columns:
       - name: item_pk
+        data_type: bigint
         data_tests:
           - not_null
           - unique
       - name: source_batch_id
+        data_type: text
         data_tests:
           - not_null
       - name: is_valid
+        data_type: boolean
         data_tests:
           - not_null
       - name: order_id
+        data_type: text
         data_tests:
           - relationships:
               arguments:
@@ -71,6 +114,7 @@ models:
                 severity: warn
                 where: is_valid = TRUE
       - name: product_id
+        data_type: text
         data_tests:
           - relationships:
               arguments:
@@ -80,6 +124,7 @@ models:
                 severity: warn
                 where: is_valid = TRUE
       - name: seller_id
+        data_type: text
         data_tests:
           - relationships:
               arguments:
@@ -88,9 +133,23 @@ models:
               config:
                 severity: warn
                 where: is_valid = TRUE
+      - name: order_item_id
+        data_type: integer
+      - name: shipping_limit_date
+        data_type: timestamp with time zone
+      - name: price
+        data_type: numeric(12, 2)
+      - name: freight_value
+        data_type: numeric(12, 2)
+      - name: updated_at
+        data_type: timestamp with time zone
   - name: stg_order_payments
+    config:
+      contract:
+        enforced: true
     columns:
       - name: order_id
+        data_type: text
         data_tests:
           - not_null
           - relationships:
@@ -101,15 +160,19 @@ models:
                 severity: warn
                 where: is_valid = TRUE
       - name: payment_sequential
+        data_type: integer
         data_tests:
           - not_null
       - name: source_batch_id
+        data_type: text
         data_tests:
           - not_null
       - name: is_valid
+        data_type: boolean
         data_tests:
           - not_null
       - name: payment_type
+        data_type: text
         data_tests:
           - accepted_values:
               arguments:
@@ -121,19 +184,32 @@ models:
                   - not_defined
               config:
                 where: is_valid = TRUE
+      - name: payment_installments
+        data_type: integer
+      - name: payment_value
+        data_type: numeric(12, 2)
+      - name: updated_at
+        data_type: timestamp with time zone
   - name: stg_order_reviews
+    config:
+      contract:
+        enforced: true
     columns:
       - name: review_pk
+        data_type: bigint
         data_tests:
           - not_null
           - unique
       - name: source_batch_id
+        data_type: text
         data_tests:
           - not_null
       - name: is_valid
+        data_type: boolean
         data_tests:
           - not_null
       - name: order_id
+        data_type: text
         data_tests:
           - relationships:
               arguments:
@@ -142,51 +218,127 @@ models:
               config:
                 severity: warn
                 where: is_valid = TRUE
+      - name: review_id
+        data_type: text
+      - name: review_score
+        data_type: smallint
+      - name: review_creation_date
+        data_type: timestamp with time zone
+      - name: review_answer_timestamp
+        data_type: timestamp with time zone
+      - name: updated_at
+        data_type: timestamp with time zone
+      - name: review_comment_title
+        data_type: text
+      - name: review_comment_message
+        data_type: text
   - name: stg_products
+    config:
+      contract:
+        enforced: true
     columns:
       - name: product_id
+        data_type: text
         data_tests:
           - not_null
           - unique
       - name: source_batch_id
+        data_type: text
         data_tests:
           - not_null
       - name: is_valid
+        data_type: boolean
         data_tests:
           - not_null
+      - name: product_name_lenght
+        data_type: integer
+      - name: product_description_lenght
+        data_type: integer
+      - name: product_photos_qty
+        data_type: integer
+      - name: product_weight_g
+        data_type: integer
+      - name: product_length_cm
+        data_type: integer
+      - name: product_height_cm
+        data_type: integer
+      - name: product_width_cm
+        data_type: integer
+      - name: updated_at
+        data_type: timestamp with time zone
+      - name: product_category_name
+        data_type: text
   - name: stg_sellers
+    config:
+      contract:
+        enforced: true
     columns:
       - name: seller_id
+        data_type: text
         data_tests:
           - not_null
           - unique
       - name: source_batch_id
+        data_type: text
         data_tests:
           - not_null
       - name: is_valid
+        data_type: boolean
         data_tests:
           - not_null
+      - name: seller_zip_code_prefix
+        data_type: text
+      - name: updated_at
+        data_type: timestamp with time zone
+      - name: seller_city
+        data_type: text
+      - name: seller_state
+        data_type: text
   - name: stg_geolocation
+    config:
+      contract:
+        enforced: true
     columns:
       - name: geolocation_pk
+        data_type: bigint
         data_tests:
           - not_null
           - unique
       - name: source_batch_id
+        data_type: text
         data_tests:
           - not_null
       - name: is_valid
+        data_type: boolean
         data_tests:
           - not_null
+      - name: geolocation_zip_code_prefix
+        data_type: text
+      - name: geolocation_lat
+        data_type: double precision
+      - name: geolocation_lng
+        data_type: double precision
+      - name: geolocation_city
+        data_type: text
+      - name: geolocation_state
+        data_type: text
   - name: stg_product_category_translation
+    config:
+      contract:
+        enforced: true
     columns:
       - name: product_category_name
+        data_type: text
         data_tests:
           - not_null
           - unique
       - name: source_batch_id
+        data_type: text
         data_tests:
           - not_null
       - name: is_valid
+        data_type: boolean
         data_tests:
           - not_null
+      - name: product_category_name_english
+        data_type: text

@@ -41,7 +41,9 @@ def test_incremental_orders_replay_and_tombstone(tmp_path: Path):
     test_id = f"dbt53-{uuid4().hex}"
     order_id = test_id + "-order"
     b1, b2, b3 = [test_id + "-batch-" + str(i) for i in (1, 2, 3)]
-    t = datetime(2017, 3, 1, tzinfo=timezone.utc)
+    t = datetime(2017, 3, 1, tzinfo=timezone.utc) + timedelta(
+        microseconds=int(test_id[6:18], 16)
+    )
 
     def add_batch(batch, status, source_updated_at, certified_at):
         with admin.get_conn() as conn, conn.cursor() as cur:

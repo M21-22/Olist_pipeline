@@ -37,9 +37,13 @@ def test_rejection_routes_current_version_and_correction(tmp_path: Path):
         )
         assert p.returncode == 0, p.stdout[-5000:] + "\n" + p.stderr[-3000:]
 
-    token = f"dq53-{uuid4().hex}"
+    fixture_id = uuid4().hex
+    token = f"dq53-{fixture_id}"
     order_id = token + "-order"
-    t = datetime(2017, 3, 10, tzinfo=timezone.utc)
+    # The landed-batch uniqueness constraint also includes the interval end.
+    t = datetime(2017, 3, 10, tzinfo=timezone.utc) + timedelta(
+        microseconds=int(fixture_id[:12], 16)
+    )
 
     def insert_version(
         suffix,

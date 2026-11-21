@@ -20,7 +20,7 @@ def test_schema_covers_all_staging_models_and_required_keys():
     models = {x['name']: x for x in doc['models']}
     assert models.keys() == EXPECTED.keys()
     for name, keys in EXPECTED.items():
-        cols = {x['name']: x['data_tests'] for x in models[name]['columns']}
+        cols = {x['name']: x.get('data_tests', []) for x in models[name]['columns']}
         for key in keys:
             assert 'not_null' in cols[key], (name, key)
             if len(keys) == 1:
