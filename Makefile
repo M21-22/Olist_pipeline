@@ -73,11 +73,6 @@ emulator-reset:
 		echo "Cancelled"; \
 	fi
 
-.PHONY: check2
-
-check2:
-	bash scripts/check-phase2.sh
-
 # Ephemeral regression stack
 TEST_COMPOSE := docker compose -f infra/compose.test.yaml
 
