@@ -45,16 +45,28 @@ dbt staging (deduplication, normalization, latest-state views)
        └─ Invalid individual rows → quarantine.rejected_rows
                   │
                   ▼
-dbt marts (facts, dimensions, customer SCD2 later)
-  └─ GATE 4 — dbt tests + planned Soda freshness/volume/drift checks
+dbt marts (facts, dimensions, purchase-time customer SCD2)
+  ├─ Rebuild customer validity ranges from valid orders and customer records
+  ├─ Resolve fact customer keys at the parent order purchase time
+  └─ dbt marts validation; Gate 4 Soda freshness, volume and drift checks planned
                   │
                   ▼
-API contract views → FastAPI → Prometheus/Grafana
+6 API contract views (implemented) → FastAPI / Prometheus / Grafana (planned)
 
 SEPARATE PERIODIC AUDIT — include/reconcile.py
   └─ Compare source state vs latest certified raw (missing, changed, deleted).
      Only reliable when source writes paused and certified ingest caught up.
 ```
+
+## Phase 6 transformation and validation
+
+- **Airflow:** `transform_staging` → manual `transform_marts` (no automated publish gate yet). `transform_marts` runs `build_marts_and_api` then `validate_marts_and_api` on the `batch` queue. The customer timeline is built from purchase observations.
+- **Dimensions:** `dim_customer` (purchase-observed SCD2); `dim_product`, `dim_seller` (Type 1); `dim_geography` (representative ZIP-prefix geography); `dim_date` (calendar).
+- **Facts:** `fct_orders`, `fct_order_items`, `fct_payments`, `fct_reviews` (incremental merge).
+- **Analytics:** `mart_daily_kpis`, `mart_seller_delivery_sla`.
+- **API schema:** `orders`, `order_items`, `seller_delivery_performance`, `sla_alerts`, `daily_kpis`, `categories_summary`. These are read-only SQL views for future consumers, not live HTTP endpoints.
+- **Customer time semantics:** use `customer_unique_id` and order-associated geography observed at purchase timestamps. Sequential unchanged locations form one half-open SCD2 interval. Fact customer keys use the parent order's purchase timestamp. The model cannot infer unseen move dates. See [ADR-0009](adr/0009-rebuildable-customer-history.md).
+- **Validation observed locally:** 70/70 isolated Python tests passed; dbt unit tests and all dbt data tests passed; `dbt docs generate` succeeded; `transform_marts` completed successfully.
 
 ## Operational state
 
@@ -71,8 +83,8 @@ SEPARATE PERIODIC AUDIT — include/reconcile.py
 - Retry/replay **the same** batch ID can recover transient loader failures. A damaged
   already-published artifact has no automatic release path: require explicit manual
   remediation or a controlled re-extraction operation before later intervals can certify.
-- Gate 1 quarantine/alerts and expanded defect-catalog rules are pending.
-- Static reference snapshots, automated hard-delete repairs/tombstones are deferred.
-- Full database/Docker integration testing is required before deploying these changes.
+- Gate 1 quarantine artifacts are implemented and covered by local integration tests; automatic alert delivery and expanded defect-catalog evaluation remain pending.
+- Staging includes complete certified reference-data tables; automated hard-delete detection, repairs and tombstone generation remain deferred.
+- Phase 6's local database/Docker regression checks passed; end-to-end publication controls, Soda Gate 4 and clean CI verification are not yet complete.
 
-See [plan.md](../plan.md), [ADR](adr/) and [defect catalog](defect-catalog.md).
+See [plan.md](../plan.md), [Phase 6 implementation guide](phase6-implementation-guide.md), [ADR](adr/) and [defect catalog](defect-catalog.md).

@@ -11,13 +11,14 @@ Storage must support bucket-level access controls, object versioning,
 and lifecycle management.
 
 ## Decision
-Use a maintained MinIO-compatible community fork, exposed through
+Use Silo, a MinIO-compatible community fork, exposed through
 the S3 API.
 
 The Docker Compose service will be named `minio`.
 
-Storage endpoints, credentials, and image versions will be
-configured through environment variables.
+Configure client endpoints and credentials through deployment settings.
+The supplied Compose file pins the image directly to
+`pgsty/silo:RELEASE.2026-10-26T00-00-00Z`.
 
 ## Alternatives Considered
 - Upstream MinIO
@@ -50,4 +51,6 @@ Negative:
 - Expire noncurrent object versions after 30 days.
 - Airflow may read and write landing and quarantine, but not delete.
 - Backup credentials have separate permissions.
-- Verify the exact container image and client versions before Phase 1.
+- Verify deployed bucket policies, versioning, and lifecycle settings.
+  The supplied Compose file starts Silo without a bucket bootstrap service.
+- Verify client compatibility when changing the image.

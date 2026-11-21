@@ -13,19 +13,25 @@ A single validation tool cannot reliably cover all failure modes.
 Use layered data quality gates:
 
 Gate 1:
-- Great Expectations validates landed files, schemas, and values.
+- Custom checks validate landed manifests and Parquet integrity and schema.
+- Great Expectations checks required keys and the extraction timestamp window.
 
 Gate 2:
-- Custom reconciliation validates raw loads against manifests.
+- Custom load checks reconcile raw rows and control totals with the manifest
+  before certification.
 
 Gate 3:
-- dbt tests and Great Expectations validate staging data.
+- dbt tests validate staging and its transformation invariants. The staging
+  DAG syncs row-level rejections after those tests pass. See [ADR-0008](0008-staging-incremental-and-rejection-policy.md).
 
 Gate 4:
-- dbt tests, Soda, and source-to-warehouse reconciliation
-  validate analytical outputs.
+- Phase 7 plans Soda checks for mart freshness, volume, and drift.
+- Source-to-certified-raw reconciliation is implemented separately. The plan
+  reserves downstream reconciliation and serving-state checks for Phase 7.
 
-Record validation results in the audit schema.
+Persist ingestion quality results in `audit.dq_results` and reconciliation
+outcomes in `audit.reconciliation`. Gate 3 results are visible in Airflow
+task logs. Warehouse export of dbt run results is planned.
 
 ## Alternatives Considered
 - Great Expectations only

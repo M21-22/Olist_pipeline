@@ -44,7 +44,8 @@ Negative:
 - Tasks must tolerate retries and duplicate execution.
 
 ## Implementation Constraints
-- Set Airflow parallelism to 12.
+- Read the effective Airflow scheduler parallelism from the deployment.
+  The configured workers provide ten task slots across their queues.
 - Use PostgreSQL for the Celery result backend.
 - Keep DAGs and dependencies available to every worker.
 - Verify task execution across at least two workers.

@@ -16,7 +16,6 @@ Configure:
 - Password authentication
 - Append-only persistence (AOF)
 - noeviction memory policy
-- 21600-second visibility timeout
 - Internal Docker networking only
 
 ## Alternatives Considered
@@ -48,3 +47,6 @@ Negative:
 - Use a persistent Docker volume.
 - Verify that unauthenticated access is rejected.
 - Monitor broker memory and task queues.
+- Set and verify a visibility timeout against the longest task runtime during
+  resilience hardening. The supplied Compose file leaves it unset. The plan
+  records a scheduler warning reporting an effective timeout of 86,400 seconds.

@@ -34,7 +34,7 @@ Detection rate is the percentage of injected defects correctly identified by the
 | D15 | Missing or stale batch (extract did not run) | Chaos: pause DAG | Soda freshness; watermark-lag alert; zero-row heartbeat | WARN, BLK if past SLA |
 | D16 | Volume anomaly (batch far smaller or larger than baseline) | Chaos: scale a batch | Soda volume check vs baseline | WARN or BLK by size |
 | D17 | Distribution drift (null rate, mean payment, `unknown`-member share) | Chaos: skew a column | Soda distribution checks | WARN |
-| D18 | SCD2 overlap or multiple current rows | Chaos: corrupt snapshot | dbt singular tests (G3) | BLK |
+| D18 | SCD2 overlap or multiple current rows | Chaos: corrupt customer dimension validity ranges | dbt singular tests in marts validation | BLK |
 | D19 | Text noise (whitespace, case variants) | Emulator noise | Normalization in staging; dbt `accepted_values` post-normalization | Normalize |
 | D20 | PII or non-allowlisted field in an API response | Chaos: add column to `api` view | dbt contract + Schemathesis + response-model test | CI fail |
 | D21 | Aggregate inconsistency (items + freight vs payments) | Chaos: alter payments | dbt singular test with calibrated tolerance; Soda cross-table | WARN or BLK |
