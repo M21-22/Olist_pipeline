@@ -45,7 +45,6 @@ def batch_id(table, end):
 
 def _write_parquet(table, start, end, path):
     """One REPEATABLE READ source snapshot; server-side cursor bounds memory."""
-    schema = expected_schema(table)
     names = [name for name, _ in TABLE_COLUMNS[table]]
     selection = ", ".join(identifier(name) for name in names)
     key_order = ", ".join(identifier(name) for name in MUTABLE_KEYS[table])
@@ -53,48 +52,55 @@ def _write_parquet(table, start, end, path):
         f"SELECT {selection} FROM shop.{identifier(table)} "
         f"WHERE updated_at > %s AND updated_at <= %s ORDER BY {key_order}"
     )
-    nulls = dict.fromkeys(names, 0)
-    totals = {name: Decimal(0) for name in CONTROL_COLUMNS.get(table, ())}
-    count = 0
-    minimum = maximum = None
-
     with closing(PostgresHook(postgres_conn_id=SOURCE_CONN_ID).get_conn()) as conn:
         try:
             with conn.cursor() as control:
                 control.execute(
                     "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
                 )
-            # Server-side cursor fetches ordered rows without materializing the result set.
-            with (
-                conn.cursor(name="olist_extract") as source,
-                pq.ParquetWriter(
-                    str(path), schema, compression="zstd", version="2.6"
-                ) as writer,
-            ):
-                source.itersize = CHUNK_SIZE
-                source.execute(query, (start, end))
-                while rows := source.fetchmany(CHUNK_SIZE):
-                    arrays = [
-                        pa.array(values, type=field.type)
-                        for values, field in zip(zip(*rows), schema)
-                    ]
-                    chunk = pa.Table.from_arrays(arrays, schema=schema)
-                    writer.write_table(chunk, row_group_size=CHUNK_SIZE)
-                    count += chunk.num_rows
-                    # Extract-time manifest statistics (not a Gate 1 validation).
-                    for name in names:
-                        nulls[name] += chunk.column(name).null_count
-                    for name in totals:
-                        value = pc.sum(chunk.column(name)).as_py()
-                        totals[name] += value if value is not None else Decimal(0)
-                    updated = chunk.column("updated_at")
-                    low = pc.min(updated).as_py()
-                    high = pc.max(updated).as_py()
-                    if low is not None:
-                        minimum = low if minimum is None else min(minimum, low)
-                        maximum = high if maximum is None else max(maximum, high)
+            return write_query_parquet(conn, table, query, (start, end), path)
         finally:
             conn.rollback()
+
+
+def write_query_parquet(conn, table, query, params, path):
+    """Write the source contract and manifest statistics within the caller's snapshot."""
+    schema = expected_schema(table)
+    names = schema.names
+    nulls = dict.fromkeys(names, 0)
+    totals = {name: Decimal(0) for name in CONTROL_COLUMNS.get(table, ())}
+    count = 0
+    minimum = maximum = None
+
+    # Server-side cursor fetches ordered rows without materializing the result set.
+    with (
+        conn.cursor(name="olist_extract") as source,
+        pq.ParquetWriter(
+            str(path), schema, compression="zstd", version="2.6"
+        ) as writer,
+    ):
+        source.itersize = CHUNK_SIZE
+        source.execute(query, params)
+        while rows := source.fetchmany(CHUNK_SIZE):
+            arrays = [
+                pa.array(values, type=field.type)
+                for values, field in zip(zip(*rows), schema)
+            ]
+            chunk = pa.Table.from_arrays(arrays, schema=schema)
+            writer.write_table(chunk, row_group_size=CHUNK_SIZE)
+            count += chunk.num_rows
+            # Extract-time manifest statistics (not a Gate 1 validation).
+            for name in names:
+                nulls[name] += chunk.column(name).null_count
+            for name in totals:
+                value = pc.sum(chunk.column(name)).as_py()
+                totals[name] += value if value is not None else Decimal(0)
+            updated = chunk.column("updated_at")
+            low = pc.min(updated).as_py()
+            high = pc.max(updated).as_py()
+            if low is not None:
+                minimum = low if minimum is None else min(minimum, low)
+                maximum = high if maximum is None else max(maximum, high)
     return {
         "row_count": count,
         "null_counts": nulls,
