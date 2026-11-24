@@ -105,3 +105,22 @@
             ON {% for col in key_columns %}src.{{ col }} = changed_keys.{{ col }}{{ ' AND ' if not loop.last }}{% endfor %}
     {% endif %}
 {% endmacro %}
+
+{% macro staging_captured_version(registry) %}
+    EXISTS (
+        SELECT 1 FROM pg_temp.olist_staging_pending_batches AS pending
+        WHERE pending.batch_id = {{ registry }}.batch_id
+    )
+    OR EXISTS (
+        SELECT 1 FROM audit.dbt_staging_processed_batches AS processed
+        WHERE processed.model_name = '{{ this.identifier }}'
+          AND processed.batch_id = {{ registry }}.batch_id
+    )
+{% endmacro %}
+
+{% macro staging_version_order(raw, registry) -%}
+    GREATEST({{ raw }}.updated_at, {{ registry }}.repair_observed_at) DESC NULLS LAST,
+    {{ registry }}.certified_at DESC NULLS LAST,
+    {{ raw }}._batch_id DESC,
+    {{ raw }}._row_hash DESC
+{%- endmacro %}

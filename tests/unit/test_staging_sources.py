@@ -24,8 +24,7 @@ def test_mutable_models_filter_only_certified_and_apply_shared_key_encoding():
         assert "registry.status = 'CERTIFIED'" in sql, table
         assert "registry.table_name = '" + table + "'" in sql, table
         assert "ROW_NUMBER() OVER" in sql, table
-        assert "src.updated_at DESC" in sql, table
-        assert "registry.certified_at DESC" in sql, table
+        assert "staging_version_order('src', 'registry')" in sql, table
         assert "encode_business_key(" in sql, table
         assert "deleted.source_table = '" + table + "'" in sql, table
 

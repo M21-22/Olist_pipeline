@@ -18,10 +18,7 @@ WITH ranked AS (
         ROW_NUMBER() OVER (
             PARTITION BY src.seller_id
             ORDER BY
-                src.updated_at DESC NULLS LAST,
-                registry.certified_at DESC NULLS LAST,
-                src._batch_id DESC,
-                src._row_hash DESC
+                {{ staging_version_order('src', 'registry') }}
         ) AS row_num
     FROM {{ source('raw', 'sellers') }} AS src
     INNER JOIN {{ source('audit', 'batch_registry') }} AS registry
@@ -30,6 +27,7 @@ WITH ranked AS (
             AND registry.table_name = 'sellers'
             AND registry.status = 'CERTIFIED'
     {{ staging_incremental_key_filter('sellers', ['seller_id']) }}
+    WHERE ({{ staging_captured_version('registry') }})
 )
 
 SELECT
