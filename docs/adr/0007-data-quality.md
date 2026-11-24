@@ -25,9 +25,9 @@ Gate 3:
   DAG syncs row-level rejections after those tests pass. See [ADR-0008](0008-staging-incremental-and-rejection-policy.md).
 
 Gate 4:
-- Phase 7 plans Soda checks for mart freshness, volume, and drift.
-- Source-to-certified-raw reconciliation is implemented separately. The plan
-  reserves downstream reconciliation and serving-state checks for Phase 7.
+- Soda checks mart freshness, volume, and drift.
+- The reconciliation DAG compares source with certified raw data. Gate 4
+  checks the recorded reconciliation result and updates serving state.
 
 Persist ingestion quality results in `audit.dq_results` and reconciliation
 outcomes in `audit.reconciliation`. Gate 3 results are visible in Airflow

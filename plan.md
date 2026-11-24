@@ -19,11 +19,11 @@ This document is the **target architecture and implementation roadmap**, updated
 - **Watermarks:** independent landed and certified checkpoints; landed after manifest + audit registry, certified after Gate 2. Failed Gate 1/2 batches do not roll back landed progress; certification cannot skip a failed interval.
 - **Airflow Python delivery:** Phase 3 packages reusable `airflow/include/` code in the Airflow image; no retroactive Phase 1 mount change.
 - **Reference-state semantics:** each certified static snapshot replaces the current reference state in downstream staging; it is not unioned with prior snapshots.
-- **Source delete and silent update recovery:** the implemented reconciliation compares source and certified raw state, but automated repair/tombstone generation is a **future Phase 7 objective**. Timestamp extraction alone does not capture these events.
+- **Source delete and silent update recovery:** the implemented reconciliation compares source and certified raw state, but the scheduled repair job can certify targeted batches and write tombstones. Timestamp extraction alone does not capture these events.
 - **Tests:** Phase 2 passed the 2017-03-01–2017-03-08 deterministic replay and restart tests. The ingestion DAG's seven mapped `land → certify` chains passed a normal manual run after the manual-run interval fix. The Docker-backed `make test` regression suite passed locally, including dedicated Gate 1 tests and isolated Gate 2 PostgreSQL integration. GitHub Actions execution and controlled single-table failure isolation have **not** yet been confirmed.
 - **Actual loader signatures:** `_copy_raw(cursor, table, columns, copy_path)` and `_load_transaction(table, batch_id, interval_end, manifest, columns, copy_path)`. Never reintroduce unsupported `batch_id` or `parquet_key` parameters at these call sites.
 - **Incremental window:** the implemented extraction boundary is `updated_at > start AND updated_at <= end` (with overlap applied when deriving the start). Manual DAG runs may have no `data_interval_end`; the ingestion task falls back to `dag_run.run_after`.
-- **Reconciliation:** continuous (watermark-aware, lag-deferring) and full (strict, quiescent-source) modes exist and are tested against raw certified state. Automated repair/tombstone generation and the full Phase 7/Soda acceptance criteria remain future work.
+- **Reconciliation:** continuous (watermark-aware, lag-deferring) and full (strict, quiescent-source) modes exist and are tested against raw certified state. Repair and tombstone lifecycle have PostgreSQL fixture coverage. The warehouse quality suite covers D08–D21. Soda calibration was exercised on a clean Olist replay in disposable PostgreSQL.
 
 ---
 
@@ -37,7 +37,7 @@ This document is the **target architecture and implementation roadmap**, updated
 | 3 — Incremental extraction | Implemented and exercised | Seven mapped tables, landing, watermarks, manifest and manual-run handling; full fault-injection proof remains pending |
 | 4 — Landing quality and raw certification | Implemented and exercised | Gate 1 / Gate 2, raw loading, audit and rollback semantics; tests pass locally; complete defect-catalog demonstration and alerts pending |
 | 5–6 — dbt staging and marts | Implemented and exercised locally | Staging and marts DAGs have succeeded locally. Verify the late-purchase and rebuild-parity regression separately from the DAG run. |
-| 7 — Gates 3–4 and reconciliation | Partially implemented ahead of phase | `reconcile` supports continuous and strict full modes; dbt/Soda gates, automatic repair and end-to-end acceptance remain pending |
+| 7 — Gates 3–4 and reconciliation | Partially implemented ahead of phase | `reconcile` supports continuous and strict full modes; dbt/Soda publication gates have passed PostgreSQL fixture checks. Repair lifecycle has PostgreSQL fixture coverage. Full acceptance remains pending |
 | 8–11 — Chaos, API, observability, security/DR | Planned / partial foundations | No phase-level completion claim |
 | 12 — CI/CD and documentation | Partial early implementation | Local isolated `make test` passes, GitHub Actions regression workflow exists; remote CI verification, DAG failure isolation and full release/demo checks remain pending |
 
@@ -338,7 +338,9 @@ The steps and acceptance criteria below define this phase; verify implemented se
 
 ### Phase 6: dbt marts
 
-Phase 6 marts consuming staging directly must use `is_valid IS TRUE` for business records. Incremental consumers must also account for keys that become invalid so previously published rows do not remain current. A temporarily invalid customer or order is excluded from purchase-observed history until corrected. API views inherit the validity policy through marts.
+Marts consuming staging directly must use `is_valid IS TRUE` for business records. Incremental consumers must also account for keys that become invalid so previously published rows do not remain current. A temporarily invalid customer or order is excluded from purchase-observed history until corrected. API views inherit the validity policy through marts.
+
+See the [customer-grain contract](docs/customer-grain.md) for the dimensional grain and join rules.
 
 **Star schema**
 
@@ -376,16 +378,16 @@ Phase 6 marts consuming staging directly must use `is_valid IS TRUE` for busines
 
 **Gate 4: marts (SLA, volume, drift) with Soda**
 - Freshness (max `_loaded_at` or event time age) per mart.
-- Volume checks against a **baseline computed from `audit.metrics_history`** (rolling mean and tolerance), so the checks do not depend on any Soda paid feature.
+- Volume checks use the last 30 eligible windows in `audit.metrics_history`. Clean Olist replay observations calibrate the per-series tolerance floors, and a chronological holdout screens proposed floors before activation.
 - Distribution checks: missing percent, duplicate count, min/max of money columns, share of `unknown` dimension members, cancel-rate bounds.
-- Cross-table consistency: item count per order vs orders; fact totals vs payment totals within a calibrated tolerance. Olist has natural inconsistencies, so **profile the clean data first and set thresholds from observed baselines**, not from assumptions.
+- Cross-table consistency requires order-level amounts and counts to agree exactly with their component facts. The share of orders with both items and payments whose item-plus-freight total differs from the payment total uses the calibrated drift check.
 
 **Reconciliation (implemented foundation; remaining roadmap)**
 - **Implemented now:** source-versus-**certified raw state** reconciliation with `continuous` mode (compares data only through the certified watermark, defers newer source changes and certain warehouse-only keys whose deletion time is unknown) and `full` mode (strict comparison after source writes stop and ingestion catches up). Both persist outcomes in `audit.reconciliation`. The one-week orders scenario returned `MATCH`, and boundary/lag-mode regressions were exercised.
-- **Not implemented as a verified end-to-end feature:** automatic repair/tombstone batches, bucketed aggregation of source-versus-**staging** hashes, full mismatch drill-down/alerting, and Soda assertions over the reconciliation results. These remain target enhancements once staging and marts exist.
-- The future repair path re-extracts affected keys into validated repair batches (or produces deletion tombstones) and alerts when recovery fails. Never assume a `continuous` `DEFERRED` result means corruption, or that a strict `full` comparison is valid while the source is actively mutating.
+- **Implemented repair:** the scheduled DAG re-extracts eligible keys from the comparison snapshot and certifies repair batches without advancing ingestion watermarks. Tombstones and reinsertion changes are applied in the same warehouse transaction. Soda checks each table’s latest result for unresolved eligible keys and requires a result within the last 30 hours. Bucketed source-versus-staging hashes and full mismatch alerting remain open.
+- The repair task fails and records unrepaired drift when a repair cannot be certified. Never assume a `continuous` `DEFERRED` result means corruption, or that a strict `full` comparison is valid while the source is actively mutating.
 
-**Publish rule:** the `transform` DAG runs `dbt build` (so a failing test stops downstream models), then Soda; on failure it sets `audit.serving_state` to `DEGRADED` or `BLOCKED` by severity. The API reads this state (Phase 9).
+**Publish rule:** the manual `transform_marts` DAG runs Gate 3 and records rejections, runs `dbt build` with mart and API tests, then executes Soda. `audit.serving_state` moves from `BLOCKED` at the start to `HEALTHY` or `DEGRADED` on success. A blocking failure leaves it `BLOCKED`. The API reads this state in Phase 9.
 
 **Deliverables:** test suites, Soda checks, reconciliation job, repair job, severity matrix (which failures block, which warn).
 **Acceptance:** all Gate 3-4 defects (D08-D21) are detected by the intended check; reconciliation finds injected silent updates and hard deletes and repairs or flags them.

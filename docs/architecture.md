@@ -48,7 +48,7 @@ dbt staging (deduplication, normalization, latest-state views)
 dbt marts (facts, dimensions, purchase-time customer SCD2)
   ├─ Rebuild customer validity ranges from valid orders and customer records
   ├─ Resolve fact customer keys at the parent order purchase time
-  └─ dbt marts validation; Gate 4 Soda freshness, volume and drift checks planned
+  └─ dbt marts validation; Gate 4 Soda freshness, volume and drift checks
                   │
                   ▼
 6 API contract views (implemented) → FastAPI / Prometheus / Grafana (planned)
@@ -58,9 +58,9 @@ SEPARATE PERIODIC AUDIT — include/reconcile.py
      Only reliable when source writes paused and certified ingest caught up.
 ```
 
-## Phase 6 transformation and validation
+## Transformation and validation
 
-- **Airflow:** `transform_staging` → manual `transform_marts` (no automated publish gate yet). `transform_marts` runs `build_marts_and_api` then `validate_marts_and_api` on the `batch` queue. The customer timeline is built from purchase observations.
+- **Airflow:** manual `transform_marts` runs staging validation, rejection synchronization, dbt marts and API validation, and the Gate 4 Soda scan on the `batch` queue. `transform_staging` runs staging validation and rejection synchronization independently.
 - **Dimensions:** `dim_customer` (purchase-observed SCD2); `dim_product`, `dim_seller` (Type 1); `dim_geography` (representative ZIP-prefix geography); `dim_date` (calendar).
 - **Facts:** `fct_orders`, `fct_order_items`, `fct_payments`, `fct_reviews` (incremental merge).
 - **Analytics:** `mart_daily_kpis`, `mart_seller_delivery_sla`.
@@ -72,8 +72,8 @@ SEPARATE PERIODIC AUDIT — include/reconcile.py
 
 - `audit.extraction_watermarks` and `audit.landed_batches` track landing.
 - `audit.certified_watermarks` and `audit.batch_registry` track certification.
-- `audit.dq_results` stores Gate 1 results; `audit.reconciliation` stores periodic drift audits.
-- `audit.deleted_keys` is reserved for future hard-delete repair.
+- `audit.dq_results` stores batch and transform check results. `audit.reconciliation` stores periodic drift audits.
+- `audit.deleted_keys` holds observed source deletions until reconciliation certifies the key again.
 - `audit.task_runs`, `audit.metrics_history`, `audit.serving_state` retained.
 - Dropped tables: `audit.dbt_run_results` and `audit.api_log`.
 - `chunk_ranges` is deliberately removed from the manifest and audit schema.
@@ -84,7 +84,7 @@ SEPARATE PERIODIC AUDIT — include/reconcile.py
   already-published artifact has no automatic release path: require explicit manual
   remediation or a controlled re-extraction operation before later intervals can certify.
 - Gate 1 quarantine artifacts are implemented and covered by local integration tests; automatic alert delivery and expanded defect-catalog evaluation remain pending.
-- Staging includes complete certified reference-data tables; automated hard-delete detection, repairs and tombstone generation remain deferred.
-- Phase 6's local database/Docker regression checks passed; end-to-end publication controls, Soda Gate 4 and clean CI verification are not yet complete.
+- Staging includes complete certified reference-data tables and applies repair versions and tombstones for mutable tables.
+- Warehouse quality gates and serving-state updates passed PostgreSQL fixture checks. Scheduled reconciliation can repair eligible source-to-raw differences. Full defect-catalog acceptance and clean CI verification remain pending.
 
-See [plan.md](../plan.md), [Phase 6 implementation guide](phase6-implementation-guide.md), [ADR](adr/) and [defect catalog](defect-catalog.md).
+See [plan.md](../plan.md), [customer-grain contract](customer-grain.md), [ADR](adr/) and [defect catalog](defect-catalog.md).

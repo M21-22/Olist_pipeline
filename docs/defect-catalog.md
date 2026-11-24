@@ -57,9 +57,9 @@ detected injected defects / total injected defects * 100
 
 A defect counts as detected only when the intended gate identifies it and the expected action is executed.
 
-Test results will be recorded during Phase 8.
+The defect-detection matrix will record test results.
 
-New defects found by the fuzz job in Phase 8 will be appended with their ID, detection check, and automated test.
+New defects found by the seeded fuzz job will be appended with their ID, detection check, and automated test.
 
 ## Implementation Status
 

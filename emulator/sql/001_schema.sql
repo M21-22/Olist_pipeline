@@ -97,7 +97,7 @@ CREATE TABLE shop.order_reviews (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- Static reference data, refreshed in full during Phase 3.
+-- Static reference data, refreshed in full by extraction.
 
 CREATE TABLE shop.geolocation (
     geolocation_pk bigint PRIMARY KEY,

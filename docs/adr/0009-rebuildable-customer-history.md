@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for Phase 6.
+Accepted.
 
 ## Context
 
@@ -37,4 +37,4 @@ include the resolved customer key so previously loaded facts can be updated.
 
 The acceptance checks cover non-overlapping ranges, purchase-time fact keys,
 and parity between incremental runs and a full dbt rebuild from certified raw
-data. The Phase 11 landing replay drill also verifies the upstream reconstruction.
+data. The landing replay drill also verifies the upstream reconstruction.

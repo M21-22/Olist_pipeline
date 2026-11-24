@@ -45,4 +45,4 @@ Negative:
 - Publish only required ports.
 - Bind published ports to 127.0.0.1.
 - Use Docker service names for internal communication.
-- Verify network isolation during Phase 1 testing.
+- Verify network isolation in infrastructure smoke tests.

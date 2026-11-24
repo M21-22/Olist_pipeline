@@ -2,7 +2,7 @@
 
 A containerized data engineering platform based on the [Olist Brazilian E-Commerce dataset](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce). The project is designed as an end-to-end **micro-batch ELT platform**, progressing from simulated operational data through auditable ingestion, validation, warehousing, analytics, serving, and observability.
 
-> **Project status — 21 November 2026:** Phases 0–6 have been implemented to the locally validated scope. Both `transform_staging` and `transform_marts` have succeeded; the isolated Python suite passed **70/70 tests**, dbt unit and warehouse data tests passed, and `dbt docs generate` succeeded. Customer history is reconstructed from purchase observations. **Gate 4/Soda, automated reconciliation repairs, publishing controls, and the serving/monitoring services remain future work.**
+> **Project status:** Ingestion, dbt transformations, and warehouse quality gates have been validated locally. Reconciliation repairs eligible source-to-raw differences, and Soda checks update serving status. The serving API and monitoring are planned.
 
 ## Architecture
 
@@ -45,7 +45,7 @@ Python source emulator ──► PostgreSQL source (shop)
                                                ▼
                                         dbt marts + API contract views
                                         purchase-time customer SCD2
-                                        Gate 4/Soda checks planned
+                                        Gate 4/Soda checks
                                                │
                                                ▼
                                         API / monitoring
@@ -55,7 +55,7 @@ Orchestration: Airflow 3.3.2 + CeleryExecutor + Valkey
 Runtime: Docker Compose  |  Source and warehouse: PostgreSQL 17
 ```
 
-The diagram separates **implemented ingestion, staging validation, reconciliation comparison, and dbt marts** from **planned Gate 4, automated repair, and serving**. The platform runs locally with Docker Compose; the test environment uses a separate, disposable database stack.
+The platform runs locally with Docker Compose. The test environment uses a separate, disposable database stack.
 
 ## Technology stack
 
@@ -74,23 +74,23 @@ The diagram separates **implemented ingestion, staging validation, reconciliatio
 
 ## Development progress
 
-The implementation follows the phased roadmap in [`plan.md`](plan.md). A phase is marked complete only to the extent supported by the checks described here; partially implemented features are not presented as finished.
+See [the implementation roadmap](plan.md) for target acceptance criteria.
 
-| Phase | Scope | Progress |
-|---|---|---|
-| **0** | Architecture decisions, repository setup, development tooling | Foundation established |
-| **1** | Docker infrastructure, PostgreSQL, object storage, Airflow and Celery | Core services operational; queue-dispatch smoke test passed |
-| **2** | Olist source database and event emulator | One-week deterministic replay and restart-equivalence checks passed |
-| **3** | Incremental extraction and Parquet landing | Implemented; timestamp-boundary, overlap, and runtime checks passed |
-| **4** | Gate 1, Gate 2, transactional raw loading and certification | Implemented; unit and PostgreSQL integration checks passed |
-| **5** | dbt staging and Gate 3 staging validation | Implemented and locally tested; batch DAG succeeded; complete phase acceptance remains subject to broader release checks |
-| **6** | dbt dimensional marts | **Local acceptance passed:** dimensional/fact/analytics models, API views, purchase-observed customer history, Python and dbt tests, dbt docs |
-| **7** | Gate 4, broader quality checks, reconciliation repair | Continuous/full reconciliation comparison implemented; repair/tombstone generation and Soda checks pending |
-| **8** | Defect injection and detection evaluation | Defect ground truth exists; comprehensive evaluation pending |
-| **9** | Serving API | Planned |
-| **10** | Metrics, monitoring, dashboards and alerts | Planned |
-| **11** | Security, backup and disaster recovery | Initial access controls implemented; full acceptance pending |
-| **12** | CI/CD, documentation, runbooks and delivery | Automated local regression suite passed; GitHub CI and final delivery pending |
+| Scope | Progress |
+|---|---|
+| Architecture decisions, repository setup, development tooling | Foundation established |
+| Docker infrastructure, PostgreSQL, object storage, Airflow and Celery | Core services operational; queue-dispatch smoke test passed |
+| Olist source database and event emulator | One-week deterministic replay and restart-equivalence checks passed |
+| Incremental extraction and Parquet landing | Implemented; timestamp-boundary, overlap, and runtime checks passed |
+| Gate 1, Gate 2, transactional raw loading and certification | Implemented; unit and PostgreSQL integration checks passed |
+| dbt staging and Gate 3 staging validation | Implemented and locally tested; batch DAG succeeded; broader release checks remain |
+| dbt dimensional marts | **Local acceptance passed:** dimensional/fact/analytics models, API views, purchase-observed customer history, Python and dbt tests, dbt docs |
+| Gate 4, broader quality checks, reconciliation repair | D08–D21 acceptance suite, reconciliation repair, and per-series Soda calibration |
+| Defect injection and detection evaluation | Defect ground truth exists; comprehensive evaluation pending |
+| Serving API | Planned |
+| Metrics, monitoring, dashboards and alerts | Planned |
+| Security, backup and disaster recovery | Initial access controls implemented; full acceptance pending |
+| CI/CD, documentation, runbooks and delivery | Automated local regression suite passed; GitHub CI and final delivery pending |
 
 ### Source emulator
 
@@ -120,7 +120,9 @@ The reconciliation implementation supports two modes:
 - **Continuous:** compares eligible source records against certified raw data using the certified watermark; defers changes that cannot yet be evaluated reliably.
 - **Full:** performs a stricter comparison when the source is quiescent and ingestion is caught up.
 
-A local continuous check of `orders` reported **586 matched records, 0 deferred, `MATCH`**. Automated repair and deletion/tombstone workflows are not yet complete.
+The scheduled `reconcile` DAG runs continuous comparison and repairs eligible differences for each mutable table. It re-extracts missing or changed keys in the same source snapshot, validates a targeted Parquet batch through Gates 1 and 2, and records observed deletions as tombstones. This does not advance the normal ingestion watermarks. A later eligible reconciliation can re-extract a reinserted key and clear its tombstone. Run `transform_marts` after reconciliation to apply the changes to staging and marts.
+
+The batch-worker image includes reconciliation repair. A successful repair logs the original difference count and the repair batch ID in `audit.reconciliation`. Repair artifacts live under `landing/<table>/repair/`. The audit registry is authoritative for certification. A rollback can leave an unregistered object.
 
 ### dbt staging and Gate 3
 
@@ -132,11 +134,11 @@ The `transform_staging` DAG runs on the Airflow **`batch`** queue. Its tasks bui
 - **Gate 3** validates staging keys, provenance, allowed values, and relationships. Invalid current-state records remain visible with `is_valid = false` and are synchronized into `quarantine.rejected_rows`; downstream marts must exclude them.
 - The isolated integration suite covers idempotency, late/tied certification, concurrent execution, failure recovery, full-refresh equivalence, and all seven mutable models. The staging test suite has also passed against the persistent warehouse.
 
-**Boundary:** reconciliation compares the source and certified raw state, but **automatic hard-delete detection, repair/tombstone creation, and reinsertion recovery are planned for Phase 7**. The staging layer can apply already registered deletion keys; this does not make automated repair complete.
+Reconciliation repairs hard deletes and silent updates against certified raw when the keys are eligible under the overlap window. The next staging run applies certified repairs and tombstones.
 
-### dbt marts, API views and Phase 6 acceptance
+### dbt marts and API views
 
-The `transform_marts` DAG runs manually on the Airflow `batch` queue **after** a successful `transform_staging` run. It builds dimensions, facts, analytical marts and API views, then executes singular data assertions. Generic model tests execute during `dbt build`; fixture-based dbt unit tests run separately. The customer SCD2 timeline is built from purchase observations in staging.
+The manual `transform_marts` DAG runs Gate 3 before it builds and validates dimensions, facts, analytical marts and API views. It then runs the Gate 4 Soda scan. Generic and singular data tests execute during `dbt build`. Fixture-based dbt unit tests run separately. The customer SCD2 timeline is built from purchase observations in staging.
 
 - **Five dimensions:** `dim_customer` (purchase-observed SCD2), `dim_product` and `dim_seller` (Type 1), `dim_geography` (ZIP-prefix representative location), and `dim_date` (calendar).
 - **Four incremental facts:** `fct_orders`, `fct_order_items`, `fct_payments`, and `fct_reviews`. The customer key is resolved at the parent order's purchase timestamp; late purchase observations can change historical customer ranges and cause fact re-keying.
@@ -148,7 +150,7 @@ The `transform_marts` DAG runs manually on the Airflow `batch` queue **after** a
 
 **Verified locally:** the `transform_marts` DAG completed, the isolated Python suite passed **70/70**, dbt unit tests passed, dbt generic/singular data tests passed, and `dbt docs generate` succeeded. This does not establish end-to-end automated publishing or a clean GitHub Actions run.
 
-Implementation and acceptance details: [`docs/phase6-implementation-guide.md`](docs/phase6-implementation-guide.md).
+See the [customer-grain contract](docs/customer-grain.md) for model grains and join rules.
 
 ### Automated testing
 
@@ -185,7 +187,63 @@ After the services are started, use the Airflow UI to trigger `transform_staging
 
 ### Run marts and API transformations
 
-After `transform_staging` succeeds, manually trigger `transform_marts` in Airflow. It runs `build_marts_and_api` followed by `validate_marts_and_api`. Publication gates and automatic staging-to-marts triggering are not part of Phase 6.
+Run ingestion first so the seven mutable tables have certified checkpoints. Rebuild the Airflow image and recreate its services with `docker compose --env-file .env -f infra/compose.yaml up -d --build` so the batch worker picks up the Soda runtime and `SODA_READER_PASSWORD`. Run reconciliation successfully for all seven mutable tables, then trigger `transform_marts` in Airflow. The daily `reconcile` run waits for the corresponding `ingest` run. For a manual reconciliation, use a logical date five minutes after a successful ingestion run’s logical date.
+
+The SQL files in `infra/postgres/warehouse-init/` define the schema, drift
+functions, and grants for a fresh PostgreSQL data directory. Keep the existing
+warehouse volume if it already has these definitions.
+
+| Condition | Serving state |
+|---|---|
+| dbt and Soda checks pass | `HEALTHY` |
+| dbt or Soda reports warnings, with all blocking checks passing | `DEGRADED` |
+| Transform in progress, dbt failure, Soda failure, or scan error | `BLOCKED` |
+| Certified input consumed by staging is older than 45 minutes | `DEGRADED` |
+| Certified input is missing or older than 90 minutes | `BLOCKED` |
+| Latest source-to-raw audit has unresolved eligible drift, or any input lacks reconciliation evidence from the past 30 hours | `BLOCKED` on the next publication attempt |
+
+The freshness check uses certified window end times, so empty heartbeats advance freshness and historical Olist business dates do not make a current run stale. `audit.metrics_history` keeps observations from successful publications, including publications with Soda warnings. The rolling reference uses the first observation per certified window, includes only observations without Soda warnings, and evaluates after seven prior windows using up to 30. Order item and payment totals must agree with their component facts. Differences between item-plus-freight and payment amounts are profiled separately because the source may contain legitimate differences.
+
+`audit.dq_results` keeps dbt and Soda check outcomes per transform attempt. `audit.serving_state` holds the publication decision. The future FastAPI service will enforce that decision for consumers of the API views. Gate 4 reads the latest result per table, including `DEFERRED`, and evaluates unresolved eligible keys independently of deferred keys. The 30-hour coverage limit allows six hours of delay for the daily reconciliation.
+
+### Calibrate Soda on a clean replay
+
+Use an isolated Olist stack for a fresh replay. Before seeding it, set
+`EMULATOR_DEFECTS_ENABLED=false` in its `.env` and leave external injectors off.
+The emulator includes defect settings in its replay fingerprint, so keep the
+setting fixed from seed through replay. To collect data automatically, set
+`OLIST_TRANSFORM_MARTS_SCHEDULE="5,20,35,50 * * * *"` before starting Airflow
+and enable the `ingest`, `reconcile`, and `transform_marts` DAGs. This starts publication five
+minutes after the corresponding ingestion trigger. Choose a capture period with
+ordinary traffic, including quiet periods, and at least 28 distinct certified
+windows per series. Allow extra windows if a series is missing values or has
+too few accepted observations. Keep the emulator replaying during the capture.
+
+Run the profile and apply commands with the UTC boundaries of your clean
+publication period. The start is inclusive and the end is exclusive.
+
+```bash
+export CLEAN_FROM=2026-11-23T00:00:00Z CLEAN_UNTIL=2026-11-24T00:00:00Z
+make profile-soda-drift
+make apply-soda-drift
+```
+
+The profile fits a separate floor per metric and object using the 95th
+percentile of historical absolute deviations. After seven warm-up windows, it
+requires at least 14 scored fit windows and reserves the last seven for
+validation. It reports the warning count under both the default and proposed
+floor. `make apply-soda-drift` installs only `READY` thresholds. Other series keep
+their current floor. Soda uses the larger of the floor and three sample
+standard deviations. Use the capture bounds for the warehouse being calibrated,
+since replay speed and publication cadence affect the observations.
+
+In a local replay of the public Olist data with zero injected defects, 47
+15-minute windows from 16 April 2018 followed the bootstrap window. The
+emulator and compiled dbt models supplied the metrics in disposable PostgreSQL.
+The profile installed 17 of 18 thresholds. The proposed
+`mart_seller_delivery_sla` row-count floor increased validation warnings from
+four to six, so that series kept its default. The observed order settlement
+difference rate ranged from 0.198% to 0.238%. [Olist source dataset](https://www.kaggle.com/olistbr/brazilian-ecommerce/home/)
 
 ### Run the test suite
 
@@ -194,7 +252,10 @@ make test              # Full isolated unit + integration regression suite
 make test-unit         # Unit tests
 make test-integration  # PostgreSQL integration tests
 make test-clean        # Remove disposable test services and volumes
+make test-warehouse-quality  # Run the D08–D21 suite in a disposable project
 ```
+
+`make test-warehouse-quality` reports a representative case for each D08–D21 defect ID and handles fixture setup and cleanup. The volume and distribution cases use synthetic history to verify Soda's decisions, including the effect of a fitted floor. D20 checks the SQL API view, while HTTP response contracts will be tested with the serving API.
 
 The test environment is defined in `infra/compose.test.yaml` and is independent of the running application database volumes.
 
@@ -232,7 +293,7 @@ The generated `index.html`, `manifest.json` and `catalog.json` reside in the con
 
 ## Next milestones
 
-1. Complete Gate 4/Soda integration, automated reconciliation repair, and tombstone lifecycle management (Phase 7).
+1. Capture and apply Soda calibration for the target warehouse using a clean Olist replay.
 2. Verify per-table failure isolation under a deliberately injected fault and the full defect-detection matrix.
 3. Confirm the regression workflow passes in GitHub Actions from a clean checkout.
 4. Build the serving API, observability, security/backup validation, and final runbooks.
