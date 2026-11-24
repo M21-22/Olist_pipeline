@@ -1,0 +1,11 @@
+data_source warehouse:
+  type: postgres
+  connection:
+    host: ${SODA_HOST}
+    port: 5432
+    username: soda_reader
+    password: ${SODA_READER_PASSWORD}
+    database: warehouse
+    schema: marts
+  sampler:
+    disable_samples: true

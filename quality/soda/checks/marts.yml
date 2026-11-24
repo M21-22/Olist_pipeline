@@ -1,0 +1,113 @@
+checks for gate4_metrics:
+  - stale_inputs:
+      name: Certified input freshness
+      warn: when > 45
+      fail: when > 90
+      stale_inputs query: |
+        SELECT MAX(COALESCE(metric_value, 91)) FROM marts.gate4_metrics
+        WHERE metric_name = 'checkpoint_age_minutes'
+
+  - historical_drift:
+      name: Volume and distribution drift against accepted transform history
+      warn: when > 0
+      historical_drift query: |
+        SELECT COUNT(*)
+        FROM marts.gate4_metrics AS current_metrics
+        LEFT JOIN audit.soda_drift_calibration AS calibration USING (metric_name, object_name)
+        CROSS JOIN LATERAL (
+            SELECT AVG(metric_value) AS mean, STDDEV_SAMP(metric_value) AS spread
+            FROM (
+                SELECT metric_value
+                FROM (
+                    SELECT DISTINCT ON (COALESCE(h.source_interval_end, h.measured_at))
+                           h.metric_value, h.baseline_eligible, COALESCE(h.source_interval_end, h.measured_at) AS window_end
+                    FROM audit.metrics_history AS h
+                    WHERE h.metric_name = current_metrics.metric_name
+                      AND h.object_name = current_metrics.object_name
+                      AND (h.source_interval_end IS NULL OR
+                           h.source_interval_end < current_metrics.source_interval_end)
+                    ORDER BY COALESCE(h.source_interval_end, h.measured_at), h.measured_at
+                ) AS windows
+                WHERE baseline_eligible
+                ORDER BY window_end DESC
+                LIMIT 30
+            ) AS recent
+            HAVING COUNT(*) >= 7
+        ) AS reference
+        WHERE current_metrics.metric_name <> 'checkpoint_age_minutes'
+          AND ABS(current_metrics.metric_value - reference.mean) >
+              GREATEST(3 * reference.spread, COALESCE(
+                  calibration.absolute_floor,
+                  audit.soda_default_drift_floor(current_metrics.metric_name, reference.mean)
+              ))
+
+  - unrepaired_keys:
+      name: Latest reconciliation has unresolved drift
+      fail: when > 0
+      unrepaired_keys query: |
+        SELECT COALESCE(SUM(unrepaired_count), 0)
+        FROM (
+            SELECT DISTINCT ON (table_name) table_name, unrepaired_count
+            FROM audit.reconciliation
+            ORDER BY table_name, checked_at DESC, reconciliation_id DESC
+        ) AS latest
+
+  - missing_or_stale_reconciliation:
+      name: Missing or stale reconciliation evidence
+      fail: when > 0
+      missing_or_stale_reconciliation query: |
+        SELECT COUNT(*)
+        FROM marts.gate4_metrics AS input
+        LEFT JOIN LATERAL (
+            SELECT checked_at
+            FROM audit.reconciliation
+            WHERE table_name = input.object_name
+            ORDER BY checked_at DESC, reconciliation_id DESC
+            LIMIT 1
+        ) AS latest ON TRUE
+        WHERE input.metric_name = 'checkpoint_age_minutes'
+          AND (latest.checked_at IS NULL
+               OR latest.checked_at < CURRENT_TIMESTAMP - INTERVAL '30 hours')
+
+  - amount_or_count_disagreement:
+      name: Order fact item and payment aggregates agree with component facts
+      fail: when > 0
+      amount_or_count_disagreement query: |
+        WITH items AS (
+            SELECT order_id, COUNT(*) AS total, SUM(price) AS price,
+                   SUM(freight_value) AS freight
+            FROM marts.fct_order_items
+            GROUP BY order_id
+        ), payments AS (
+            SELECT order_id, COUNT(*) AS total, SUM(payment_value) AS value
+            FROM marts.fct_payments
+            GROUP BY order_id
+        )
+        SELECT COUNT(*)
+        FROM marts.fct_orders AS orders
+        LEFT JOIN items USING (order_id)
+        LEFT JOIN payments USING (order_id)
+        WHERE orders.item_count IS DISTINCT FROM COALESCE(items.total, 0)
+           OR orders.item_price_total IS DISTINCT FROM COALESCE(items.price, 0)
+           OR orders.freight_total IS DISTINCT FROM COALESCE(items.freight, 0)
+           OR orders.payment_count IS DISTINCT FROM COALESCE(payments.total, 0)
+           OR orders.payment_total IS DISTINCT FROM COALESCE(payments.value, 0)
+
+checks for fct_orders:
+  - duplicate_count(order_id) = 0
+  - missing_count(order_status) = 0
+  - invalid_count(payment_total) = 0:
+      valid min: 0
+      name: Non-negative order payments
+
+checks for fct_payments:
+  - duplicate_count(order_id, payment_sequential) = 0
+  - missing_count(payment_value) = 0
+  - invalid_count(payment_value) = 0:
+      valid min: 0
+      name: Non-negative payments
+
+checks for mart_daily_kpis:
+  - invalid_count(cancellation_rate) = 0:
+      valid min: 0
+      valid max: 1
