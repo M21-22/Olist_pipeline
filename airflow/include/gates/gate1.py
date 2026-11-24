@@ -149,7 +149,8 @@ def validate_landed_batch(
                 and table in MUTABLE_KEYS
                 and manifest["table"] == table
                 and manifest["batch_id"] == batch_id
-                and manifest["mode"] == mode == "incremental"
+                and manifest["mode"] == mode
+                and mode in {"incremental", "repair"}
                 and as_utc(manifest["interval_end"]) == as_utc(interval_end)
                 and int(manifest["overlap_minutes"]) >= 0
             )
