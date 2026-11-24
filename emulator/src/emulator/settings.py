@@ -61,9 +61,12 @@ class DefectConfig:
     @classmethod
     def load(cls, path: Path) -> DefectConfig:
         config = yaml.safe_load(path.read_text())
+        enabled = os.environ.get("EMULATOR_DEFECTS_ENABLED", "")
+        if enabled not in {"", "true", "false"}:
+            raise ValueError("EMULATOR_DEFECTS_ENABLED must be true or false")
         return cls(
             seed=int(os.environ.get("SEED") or config["seed"]),
-            enabled=bool(config.get("enabled", True)),
+            enabled=enabled == "true" if enabled else bool(config.get("enabled", True)),
             rates=dict(config["rates"]),
             params=dict(config["params"]),
         )

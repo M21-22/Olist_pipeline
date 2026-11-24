@@ -19,12 +19,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?Set AIRFLOW_JWT_SECRET}
     AIRFLOW__API__BASE_URL: http://airflow-api-server:8080
     AIRFLOW__LOGGING__REMOTE_LOGGING: "false"
-    AIRFLOW_CONN_OLIST_SOURCE: postgresql://source_reader:${SOURCE_READER_PASSWORD}@source-db:5432/source
-    AIRFLOW_CONN_OLIST_AUDIT: postgresql://ingest_audit_writer:${INGEST_AUDIT_WRITER_PASSWORD}@warehouse-db:5432/warehouse
-    AIRFLOW_CONN_OLIST_S3: '{"conn_type":"aws","login":"${S3_PIPELINE_ACCESS_KEY}","password":"${S3_PIPELINE_SECRET_KEY}","extra":{"endpoint_url":"http://minio:9000","region_name":"us-east-1"}}'
-    AIRFLOW_CONN_OLIST_LOADER: postgresql://etl_loader:${ETL_LOADER_PASSWORD}@warehouse-db:5432/warehouse
-    AIRFLOW_CONN_OLIST_RECONCILE: postgresql://dbt_runner:${DBT_RUNNER_PASSWORD}@warehouse-db:5432/warehouse
-    AIRFLOW_CONN_OLIST_TEST_ADMIN: "postgresql://olist_test_admin:${OLIST_TEST_ADMIN_PASSWORD_ENCODED}@warehouse-db:5432/warehouse_gate2_test"
+    OLIST_TRANSFORM_MARTS_SCHEDULE: ${OLIST_TRANSFORM_MARTS_SCHEDULE:-}
 
   volumes:
     - ../airflow/dags:/opt/airflow/dags
@@ -42,15 +37,22 @@ x-airflow-common: &airflow-common
     valkey:
       condition: service_healthy
 
+x-airflow-ingest-env: &airflow-ingest-env
+  AIRFLOW_CONN_OLIST_SOURCE: postgresql://source_reader:${SOURCE_READER_PASSWORD}@source-db:5432/source
+  AIRFLOW_CONN_OLIST_AUDIT: postgresql://ingest_audit_writer:${INGEST_AUDIT_WRITER_PASSWORD}@warehouse-db:5432/warehouse
+  AIRFLOW_CONN_OLIST_S3: '{"conn_type":"aws","login":"${S3_PIPELINE_ACCESS_KEY}","password":"${S3_PIPELINE_SECRET_KEY}","extra":{"endpoint_url":"http://minio:9000","region_name":"us-east-1"}}'
+  AIRFLOW_CONN_OLIST_LOADER: postgresql://etl_loader:${ETL_LOADER_PASSWORD}@warehouse-db:5432/warehouse
+
 services:
 
   airflow-worker-general-1:
     <<: *airflow-common
     command: celery worker --queues default,ingest
     environment:
-      <<: *airflow-common-env
+      <<: [*airflow-common-env, *airflow-ingest-env]
       AIRFLOW__CELERY__WORKER_CONCURRENCY: "4"
       AIRFLOW__CELERY__DEFAULT_QUEUE: default
+      AIRFLOW_CONN_OLIST_TEST_ADMIN: "postgresql://olist_test_admin:${OLIST_TEST_ADMIN_PASSWORD_ENCODED}@warehouse-db:5432/warehouse_gate2_test"
       AIRFLOW_CONN_OLIST_TEST_LOADER: "postgresql://etl_loader:${ETL_LOADER_PASSWORD}@warehouse-db:5432/warehouse_gate2_test"
     depends_on:
       warehouse-db:
@@ -64,7 +66,7 @@ services:
     <<: *airflow-common
     command: celery worker --queues default,ingest
     environment:
-      <<: *airflow-common-env
+      <<: [*airflow-common-env, *airflow-ingest-env]
       AIRFLOW__CELERY__WORKER_CONCURRENCY: "4"
       AIRFLOW__CELERY__DEFAULT_QUEUE: default
     depends_on:
@@ -79,10 +81,12 @@ services:
     <<: *airflow-common
     command: celery worker --queues batch
     environment:
-      <<: *airflow-common-env
+      <<: [*airflow-common-env, *airflow-ingest-env]
       AIRFLOW__CELERY__WORKER_CONCURRENCY: "2"
       AIRFLOW__CELERY__DEFAULT_QUEUE: default
+      AIRFLOW_CONN_OLIST_RECONCILE: postgresql://dbt_runner:${DBT_RUNNER_PASSWORD}@warehouse-db:5432/warehouse
       DBT_HOST: warehouse-db
+      SODA_READER_PASSWORD: ${SODA_READER_PASSWORD:?Set SODA_READER_PASSWORD}
       DBT_RUNNER_PASSWORD: ${DBT_RUNNER_PASSWORD:?Set DBT_RUNNER_PASSWORD}
     volumes:
       - ../airflow/dags:/opt/airflow/dags
@@ -302,6 +306,7 @@ services:
       DB_PASSWORD: ${EMULATOR_WRITER_PASSWORD:?}
       DATA_DIR: /data
       SEED: ${EMULATOR_SEED:-}
+      EMULATOR_DEFECTS_ENABLED: ${EMULATOR_DEFECTS_ENABLED:-}
       SIM_SPEED: ${SIM_SPEED:-1440}
       TICK_SECONDS: ${TICK_SECONDS:-5}
       SIM_FROM: ${SIM_FROM:-}
