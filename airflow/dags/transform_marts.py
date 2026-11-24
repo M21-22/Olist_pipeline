@@ -1,64 +1,31 @@
-"""Build the dimensional marts and API contract views.
+"""Build staging, marts and API views, then publish through Gates 3–4."""
 
-Run after a successful transform_staging DAG. Deliberately manual until the
-end-to-end publishing policy is introduced; avoid serving partially validated
-staging data on an independent schedule.
+import os
+from datetime import UTC, datetime, timedelta
 
-Test execution policy (each test runs once per DAG run):
-  * build    - models plus generic (YAML) tests; singular and unit tests excluded.
-  * validate - singular data tests only.
-  * dbt unit tests run in CI, not here (they use fixtures, not warehouse data).
-"""
-
-from datetime import datetime, timedelta, timezone
-
-from airflow.providers.standard.operators.bash import BashOperator
-from airflow.sdk import dag
-
-DBT = "/home/airflow/dbt-venv/bin/dbt"
-DBT_ARGS = (
-    "--project-dir /opt/airflow/dbt "
-    "--profiles-dir /opt/airflow/dbt "
-    "--target-path /tmp/olist-transform-marts-target "
-    "--log-path /tmp/olist-transform-marts-logs"
-)
+from airflow.sdk import dag, get_current_context, task
 
 
 @dag(
     dag_id="transform_marts",
-    schedule=None,
-    start_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    schedule=os.getenv("OLIST_TRANSFORM_MARTS_SCHEDULE") or None,
+    start_date=datetime(2026, 1, 1, tzinfo=UTC),
     catchup=False,
     max_active_runs=1,
-    tags=["olist", "dbt", "marts", "api"],
+    tags=["olist", "dbt", "marts", "api", "gate4"],
 )
 def transform_marts():
-    build = BashOperator(
-        task_id="build_marts_and_api",
-        bash_command=(
-            f"set -euo pipefail; {DBT} build {DBT_ARGS} "
-            "--select path:models/marts path:models/api "
-            "--exclude 'test_type:singular' 'test_type:unit'"
-        ),
-        queue="batch",
-        # A failed data test is not transient; retrying would rebuild every model.
-        retries=0,
-        execution_timeout=timedelta(minutes=45),
-    )
+    @task(queue="batch", retries=0, execution_timeout=timedelta(minutes=90))
+    def validate_and_publish():
+        from airflow.providers.postgres.hooks.postgres import PostgresHook
+        from include.transform import run_transform
 
-    validate = BashOperator(
-        task_id="validate_marts_and_api",
-        bash_command=(
-            f"set -euo pipefail; {DBT} test {DBT_ARGS} "
-            "--select 'assert_dim_*' 'assert_dimension_*' "
-            "'assert_fact_*' 'assert_mart_*' 'assert_api_*'"
-        ),
-        queue="batch",
-        retries=0,
-        execution_timeout=timedelta(minutes=30),
-    )
+        context = get_current_context()
+        run_id = f"{context['dag'].dag_id}/{context['run_id']}/{context['ti'].try_number}"
+        conn = PostgresHook(postgres_conn_id="olist_reconcile").get_conn()
+        run_transform(conn, run_id, publish=True)
 
-    build >> validate
+    validate_and_publish()
 
 
 transform_marts()

@@ -1,3 +1,4 @@
+{{ config(tags=['staging_contract']) }}
 -- Singular dbt test: must return zero rows. Matches Python encode_key for
 -- project business keys (non-null ASCII identifiers and integer components).
 WITH cases AS (
