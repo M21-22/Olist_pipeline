@@ -17,13 +17,28 @@ models:
       +on_schema_change: fail
       # Each mutable model declares its unique_key and hooks in its own SQL.
       # Full-snapshot reference tables need replacement, not upsert.
-      +grants:
-        select: [soda_reader]
     marts:
       +schema: marts
       +materialized: table
       +grants:
-        select: [soda_reader, grafana_reader]
+        select: [grafana_reader]
+      fct_orders:
+        +grants:
+          select: [soda_reader, grafana_reader]
+      fct_order_items:
+        +grants:
+          select: [soda_reader, grafana_reader]
+      fct_payments:
+        +grants:
+          select: [soda_reader, grafana_reader]
+      quality:
+        gate4_metrics:
+          +grants:
+            select: [soda_reader, grafana_reader]
+      analytics:
+        mart_daily_kpis:
+          +grants:
+            select: [soda_reader, grafana_reader]
       # For individual models, indexes are declared in config() or properties YAML.
     api:
       +schema: api
