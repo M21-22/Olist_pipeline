@@ -10,39 +10,56 @@ models:
         enforced: true
     columns:
       - name: order_id
+        data_type: text
         description: Public order lookup identifier.
         data_tests: [not_null, unique]
       - name: order_status
+        data_type: text
         description: Latest validated order status.
       - name: purchased_at
+        data_type: timestamp with time zone
         description: Order purchase timestamp.
       - name: approved_at
+        data_type: timestamp with time zone
         description: Order approval timestamp.
       - name: delivered_to_carrier_at
+        data_type: timestamp with time zone
         description: Carrier handoff timestamp.
       - name: delivered_to_customer_at
+        data_type: timestamp with time zone
         description: Customer delivery timestamp.
       - name: estimated_delivery_at
+        data_type: timestamp with time zone
         description: Estimated delivery timestamp.
       - name: delivery_delay_days
+        data_type: numeric
         description: Signed actual-minus-estimated delay in days.
       - name: item_count
+        data_type: integer
         description: Number of valid current order items.
       - name: item_price_total
+        data_type: numeric(14, 2)
         description: Valid item price total, excluding freight.
       - name: freight_total
+        data_type: numeric(14, 2)
         description: Valid freight total.
       - name: payment_count
+        data_type: integer
         description: Number of valid current payments.
       - name: payment_total
+        data_type: numeric(14, 2)
         description: Valid current payment total.
       - name: purchase_date_sk
+        data_type: integer
         description: UTC purchase date key, or zero for unknown.
       - name: customer_state
+        data_type: text
         description: Customer state of the version effective at order purchase.
       - name: average_review_score
+        data_type: numeric(8, 4)
         description: Mean review score for this order, or null.
       - name: scored_review_count
+        data_type: bigint
         description: Number of reviews with scores.
   - name: order_items
     description: Individual current valid order items for an order-detail response.
@@ -51,25 +68,35 @@ models:
         enforced: true
     columns:
       - name: order_id
+        data_type: text
         description: Parent order identifier.
         data_tests: [not_null]
       - name: order_item_id
+        data_type: integer
         description: Line ordinal within the order.
       - name: product_id
+        data_type: text
         description: Product identifier.
       - name: seller_id
+        data_type: text
         description: Seller identifier.
       - name: category_name
+        data_type: text
         description: Current original-language product category.
       - name: category_name_english
+        data_type: text
         description: Current translated product category, when available.
       - name: price
+        data_type: numeric(12, 2)
         description: Item price excluding freight.
       - name: freight_value
+        data_type: numeric(12, 2)
         description: Item freight amount.
       - name: gross_item_amount
+        data_type: numeric(14, 2)
         description: Item price plus freight.
       - name: shipping_limit_at
+        data_type: timestamp with time zone
         description: Shipping deadline timestamp.
   - name: seller_delivery_performance
     description: >-
@@ -80,30 +107,42 @@ models:
         enforced: true
     columns:
       - name: seller_id
+        data_type: text
         description: Seller identifier.
         data_tests: [not_null]
       - name: seller_state
+        data_type: text
         description: Currently known seller state.
       - name: delivery_date
+        data_type: date
         description: UTC customer delivery date.
         data_tests: [not_null]
       - name: delivered_order_count
+        data_type: bigint
         description: Distinct delivered seller-order pairs.
       - name: late_order_count
+        data_type: bigint
         description: Delivered seller-order pairs after estimate.
       - name: late_delivery_rate
+        data_type: numeric(12, 6)
         description: Late divided by delivered.
       - name: avg_delay_days
+        data_type: numeric(14, 4)
         description: Mean delivery delay in fractional days.
       - name: baseline_order_count
+        data_type: bigint
         description: Prior 30-calendar-day sample count.
       - name: baseline_mean_delay_days
+        data_type: numeric(14, 4)
         description: Previous 30-day mean delivery delay.
       - name: baseline_stddev_delay_days
+        data_type: numeric(14, 4)
         description: Historical delay standard deviation.
       - name: delay_z_score
+        data_type: numeric(14, 4)
         description: Standardized deviation; null when baseline insufficient.
       - name: is_sla_alert
+        data_type: boolean
         description: Exploratory delivery delay alert flag.
         data_tests: [not_null]
   - name: sla_alerts
@@ -113,28 +152,39 @@ models:
         enforced: true
     columns:
       - name: seller_id
+        data_type: text
         description: Seller identifier.
         data_tests: [not_null]
       - name: seller_state
+        data_type: text
         description: Current seller region.
       - name: delivery_date
+        data_type: date
         description: UTC customer delivery date.
         data_tests: [not_null]
       - name: delivered_order_count
+        data_type: bigint
         description: Delivered seller-order pairs.
       - name: late_order_count
+        data_type: bigint
         description: Late seller-order pairs.
       - name: late_delivery_rate
+        data_type: numeric(12, 6)
         description: Late fraction.
       - name: avg_delay_days
+        data_type: numeric(14, 4)
         description: Daily mean delay in days.
       - name: baseline_order_count
+        data_type: bigint
         description: Number of baseline orders.
       - name: baseline_mean_delay_days
+        data_type: numeric(14, 4)
         description: Baseline mean delay.
       - name: baseline_stddev_delay_days
+        data_type: numeric(14, 4)
         description: Baseline standard deviation.
       - name: delay_z_score
+        data_type: numeric(14, 4)
         description: Standardized delivery delay statistic.
   - name: daily_kpis
     description: Daily business KPI view by UTC order purchase date.
@@ -143,33 +193,47 @@ models:
         enforced: true
     columns:
       - name: purchase_date_sk
+        data_type: integer
         description: UTC purchase date key.
         data_tests: [not_null, unique]
       - name: purchase_date
+        data_type: date
         description: UTC purchase date, or null for unknown.
       - name: order_count
+        data_type: bigint
         description: All orders purchased on this date.
       - name: delivered_order_count
+        data_type: bigint
         description: Orders currently delivered.
       - name: canceled_order_count
+        data_type: bigint
         description: Orders currently canceled.
       - name: cancellation_rate
+        data_type: numeric(12, 6)
         description: Canceled order share.
       - name: gmv
+        data_type: numeric(18, 2)
         description: Non-canceled and available item prices excluding freight.
       - name: item_price_total
+        data_type: numeric(18, 2)
         description: All valid item prices regardless of status.
       - name: freight_total
+        data_type: numeric(18, 2)
         description: All valid freight totals.
       - name: payment_total
+        data_type: numeric(18, 2)
         description: All valid payment totals.
       - name: item_count
+        data_type: bigint
         description: Valid order items.
       - name: payment_count
+        data_type: bigint
         description: Valid order payments.
       - name: reviewed_order_count
+        data_type: bigint
         description: Orders with scored reviews.
       - name: avg_review_score
+        data_type: numeric(8, 4)
         description: Average of order-level mean review scores.
   - name: categories_summary
     description: >-
@@ -181,13 +245,18 @@ models:
         enforced: true
     columns:
       - name: category
+        data_type: text
         description: English category name, otherwise source category or Unknown.
         data_tests: [not_null, unique]
       - name: item_count
+        data_type: bigint
         description: Included valid order-item count.
       - name: order_count
+        data_type: bigint
         description: Distinct included orders containing items in this category.
       - name: gmv
+        data_type: numeric(18, 2)
         description: Item-price GMV excluding freight.
       - name: freight_total
+        data_type: numeric(18, 2)
         description: Included item freight sum.
