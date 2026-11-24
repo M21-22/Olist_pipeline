@@ -29,8 +29,10 @@ def test_incremental_selection_uses_unprocessed_certification_membership():
     assert 'progress.last_certified_at' not in sql.split('macro staging_incremental_key_filter')[1]
 
 
-def test_migration_is_idempotent_and_grants_are_scoped():
-    sql = (ROOT / 'infra/postgres/warehouse-init/08-dbt-staging-processed-batches.sql').read_text()
-    assert 'IF NOT EXISTS' in sql
-    assert 'PRIMARY KEY (model_name, batch_id)' in sql
-    assert 'GRANT SELECT, INSERT' in sql
+def test_processed_batch_membership_key_and_grants_are_scoped():
+    init = ROOT / 'infra/postgres/warehouse-init'
+    audit = (init / '04-audit.sql').read_text()
+    grants = (init / '06-grants.sql').read_text()
+    membership = audit.split('CREATE TABLE audit.dbt_staging_processed_batches (', 1)[1].split(');', 1)[0]
+    assert 'PRIMARY KEY (model_name, batch_id)' in membership
+    assert 'GRANT SELECT, INSERT ON audit.dbt_staging_processed_batches TO dbt_runner;' in grants

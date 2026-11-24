@@ -47,7 +47,8 @@ jobs:
           docker compose version
           docker compose -f infra/compose.test.yaml config --quiet
           test -f infra/test-db-init.sh
-          test -f infra/postgres/warehouse-init/08-dbt-staging-processed-batches.sql
+          test -f infra/postgres/warehouse-init/04-audit.sql
+          test -f infra/postgres/warehouse-init/07-soda-drift-functions.sql
           test -f dbt/dbt_project.yml
 
       - name: Run complete isolated regression suite
@@ -55,6 +56,7 @@ jobs:
         run: |
           set -euo pipefail
           make test
+          make test-warehouse-quality
 
       - name: Validate dbt project and execute fixture-based unit tests
         shell: bash

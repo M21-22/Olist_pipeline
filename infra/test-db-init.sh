@@ -12,16 +12,13 @@ CREATE ROLE api_reader NOLOGIN;
 CREATE DATABASE warehouse_test;
 SQL
 
-for file in 02-schemas.sql 03-raw.sql 04-audit.sql 05-quarantine.sql 06-grants.sql; do
-  psql -v ON_ERROR_STOP=1 --username postgres --dbname warehouse_test \
-    -f "/olist-ddl/$file"
+# Use the same warehouse SQL as bootstrap. The Airflow metadata database is not needed.
+for file in /olist-ddl/*.sql; do
+  case "${file##*/}" in
+    01-*) continue ;;
+  esac
+  psql -v ON_ERROR_STOP=1 --username postgres --dbname warehouse_test -f "$file"
 done
-
-# dbt runtime additions require dbt_runner role to exist before migration.
-psql -v ON_ERROR_STOP=1 --username postgres --dbname warehouse_test \
-  -f /olist-ddl/07-dbt-staging-progress.sql
-psql -v ON_ERROR_STOP=1 --username postgres --dbname warehouse_test \
-  -f /olist-ddl/08-dbt-staging-processed-batches.sql
 
 psql -v ON_ERROR_STOP=1 --username postgres --dbname warehouse_test <<'SQL'
 CREATE SCHEMA shop;
@@ -37,7 +34,7 @@ CREATE TABLE shop.customers (
 GRANT CONNECT ON DATABASE warehouse_test TO olist_test_admin;
 GRANT SELECT ON audit.dbt_staging_progress TO olist_test_admin;
 GRANT SELECT ON audit.dbt_staging_processed_batches TO olist_test_admin;
-GRANT INSERT, DELETE ON audit.deleted_keys TO olist_test_admin;
+GRANT SELECT, INSERT, DELETE ON audit.deleted_keys TO olist_test_admin;
 GRANT USAGE ON SCHEMA quarantine TO olist_test_admin;
 GRANT SELECT ON quarantine.rejected_rows TO olist_test_admin;
 
@@ -49,7 +46,7 @@ GRANT USAGE ON ALL SEQUENCES IN SCHEMA audit TO etl_loader;
 
 -- Fixture administrator: grant only what the integration tests need.
 GRANT USAGE ON SCHEMA shop, raw, audit TO olist_test_admin;
-GRANT SELECT, INSERT, DELETE ON shop.customers TO olist_test_admin;
+GRANT SELECT, INSERT, UPDATE, DELETE ON shop.customers TO olist_test_admin;
 GRANT SELECT, INSERT, DELETE ON raw.customers, raw.orders, raw.order_items,
     raw.order_payments, raw.order_reviews, raw.products, raw.sellers TO olist_test_admin;
 GRANT SELECT, INSERT, DELETE ON audit.landed_batches TO olist_test_admin;

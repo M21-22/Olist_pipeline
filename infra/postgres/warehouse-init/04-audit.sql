@@ -38,10 +38,37 @@ CREATE TABLE audit.batch_registry (
     actual_control_totals JSONB,
     reason TEXT,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    certified_at TIMESTAMPTZ
+    certified_at TIMESTAMPTZ,
+    -- NULL identifies an ordinary ingestion batch.
+    repair_observed_at TIMESTAMPTZ
 );
 
 CREATE INDEX batch_registry_table_status_idx ON audit.batch_registry (table_name, status);
+
+-- Reporting cursor for the latest successfully processed certification.
+CREATE TABLE audit.dbt_staging_progress (
+    model_name TEXT PRIMARY KEY,
+    last_certified_at TIMESTAMPTZ,
+    last_batch_id TEXT,
+    run_cutoff_at TIMESTAMPTZ,
+    run_cutoff_batch_id TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT last_cursor_pair CHECK (
+        (last_certified_at IS NULL) = (last_batch_id IS NULL)
+    ),
+    CONSTRAINT run_cursor_pair CHECK (
+        (run_cutoff_at IS NULL) = (run_cutoff_batch_id IS NULL)
+    )
+);
+
+-- Durable per-model batch membership; certification timestamps can arrive out of order.
+-- Membership changes commit in the same transaction as the staging merge.
+CREATE TABLE audit.dbt_staging_processed_batches (
+    model_name TEXT NOT NULL,
+    batch_id TEXT NOT NULL,
+    processed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (model_name, batch_id)
+);
 
 CREATE TABLE audit.task_runs (
     dag_id TEXT NOT NULL,
@@ -89,7 +116,26 @@ CREATE TABLE audit.metrics_history (
     object_name TEXT NOT NULL,
     measured_at TIMESTAMPTZ NOT NULL,
     metric_value DOUBLE PRECISION NOT NULL,
+    source_interval_end TIMESTAMPTZ,
+    baseline_eligible BOOLEAN NOT NULL DEFAULT TRUE,
     PRIMARY KEY (metric_name, object_name, measured_at)
+);
+
+CREATE INDEX metrics_history_series_window_idx
+    ON audit.metrics_history (metric_name, object_name, source_interval_end, measured_at);
+
+CREATE TABLE audit.soda_drift_calibration (
+    metric_name TEXT NOT NULL,
+    object_name TEXT NOT NULL,
+    absolute_floor DOUBLE PRECISION NOT NULL CHECK (absolute_floor > 0 AND absolute_floor < 'Infinity'),
+    fit_samples INTEGER NOT NULL CHECK (fit_samples >= 14),
+    validation_samples INTEGER NOT NULL CHECK (validation_samples >= 7),
+    default_validation_warnings INTEGER NOT NULL,
+    calibrated_validation_warnings INTEGER NOT NULL,
+    first_source_interval_end TIMESTAMPTZ NOT NULL,
+    last_source_interval_end TIMESTAMPTZ NOT NULL,
+    calibrated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (metric_name, object_name)
 );
 
 CREATE TABLE audit.serving_state (
