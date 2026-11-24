@@ -1,4 +1,4 @@
-"""Daily watermark-aware source-vs-certified-raw drift detection."""
+"""Daily watermark-aware reconciliation and repair of eligible keys."""
 
 from datetime import datetime, timedelta, timezone
 
@@ -8,7 +8,7 @@ from airflow.providers.standard.sensors.external_task import ExternalTaskSensor
 
 @dag(
     dag_id="reconcile",
-    schedule="5 3 * * *",
+    schedule="5 0 * * *",
     start_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
     catchup=False,
     max_active_runs=1,
@@ -40,11 +40,12 @@ def reconcile():
         execution_timeout=timedelta(minutes=20),
     )
     def compare(table: str):
-        from include.reconcile import ReconciliationMismatch, compare_table
+        from include.reconcile import ReconciliationMismatch
+        from include.repair import repair_table
         from airflow.sdk.exceptions import AirflowFailException
 
         try:
-            return compare_table(table, mode="continuous")
+            return repair_table(table)
         except ReconciliationMismatch as error:
             raise AirflowFailException(str(error)) from error
 

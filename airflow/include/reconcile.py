@@ -4,18 +4,24 @@ Continuous mode uses a safety horizon (certified watermark minus overlap).
 Newer/ambiguous keys are deferred. It can flag old target-only keys as
 *currently* deleted, but cannot determine when a hard delete happened, nor
 recover an overwritten source version. Full mode requires a quiescent source.
-This module records discrepancies, but never generates repair batches.
+Scheduled recovery uses this comparison against the same source snapshot.
 """
 
 import hashlib
 import json
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import timedelta
 
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 
 from include.common import (
-    CHUNK_SIZE, MUTABLE_KEYS, OVERLAP_MINUTES, as_utc, canonical_json,
+    CHUNK_SIZE,
+    MUTABLE_KEYS,
+    OVERLAP_MINUTES,
+    TABLE_COLUMNS,
+    as_utc,
+    canonical_json,
+    identifier,
 )
 
 SOURCE_CONN_ID = "olist_source"
@@ -40,7 +46,7 @@ def state_hash(row):
     return hashlib.sha256(canonical_json(business)).hexdigest()
 
 
-def _source_rows(cursor, table):
+def _hash_rows(cursor, table):
     rows_by_key = {}
     columns = [column[0] for column in cursor.description]
     while records := cursor.fetchmany(CHUNK_SIZE):
@@ -51,58 +57,64 @@ def _source_rows(cursor, table):
     return rows_by_key
 
 
-def _target_rows(cursor, table):
-    """Use canonical hashes written at Parquet load time, not PG serialization."""
-    rows_by_key = {}
-    columns = [column[0] for column in cursor.description]
-    while records := cursor.fetchmany(CHUNK_SIZE):
-        for record in records:
-            row = dict(zip(columns, record))
-            key = encode_key(table, row)
-            rows_by_key[key] = (row["_row_hash"], row["updated_at"])
-    return rows_by_key
+def key_sql(table, alias=None):
+    columns = [identifier(key) for key in MUTABLE_KEYS[table]]
+    if alias:
+        columns = [f"{alias}.{column}" for column in columns]
+    if len(columns) == 1:
+        return f"{columns[0]}::text"
+    return f"jsonb_build_array({', '.join(columns)})::text"
 
 
-def _source_state(table):
-    keys = MUTABLE_KEYS[table]
-    order = ", ".join(f'"{key}"' for key in keys)
+@contextmanager
+def source_snapshot(table):
+    """Keep the observed rows and any targeted re-extract in one source snapshot."""
     with closing(PostgresHook(postgres_conn_id=SOURCE_CONN_ID).get_conn()) as conn:
         try:
             with conn.cursor() as cursor:
                 cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-                cursor.execute(f'SELECT MAX(updated_at) FROM shop."{table}"')
-                latest = cursor.fetchone()[0]
+                cursor.execute(f'SELECT MAX(updated_at), statement_timestamp() FROM shop.{identifier(table)}')
+                latest, observed_at = cursor.fetchone()
             with conn.cursor(name="olist_reconcile_source") as cursor:
-                cursor.execute(f'SELECT * FROM shop."{table}" ORDER BY {order}')
-                rows = _source_rows(cursor, table)
+                cursor.execute(f'SELECT * FROM shop.{identifier(table)}')
+                rows = _hash_rows(cursor, table)
+            yield conn, rows, latest, observed_at
+        finally:
             conn.rollback()
-            return rows, latest
-        except Exception:
-            conn.rollback()
-            raise
+
+
+def _source_state(table):
+    with source_snapshot(table) as (_, rows, latest, _):
+        return rows, latest
 
 
 def _certified_state(cursor, table):
     keys = MUTABLE_KEYS[table]
     partitions = ", ".join(f'r."{key}"' for key in keys)
-    key_cols = ", ".join(f'"{key}"' for key in keys)
-    cursor.execute(
-        f"""
-        SELECT {key_cols}, updated_at, _row_hash FROM (
-            SELECT r.*, ROW_NUMBER() OVER (
-                PARTITION BY {partitions}
-                ORDER BY r.updated_at DESC NULLS LAST,
-                         r._loaded_at DESC, r._batch_id DESC
-            ) AS _rank
-            FROM raw."{table}" AS r
-            JOIN audit.batch_registry AS b ON b.batch_id = r._batch_id
-            WHERE b.status = 'CERTIFIED' AND b.table_name = %s
-        ) AS ranked
-        WHERE _rank = 1
-        """,
-        (table,),
-    )
-    return _target_rows(cursor, table)
+    business_columns = ", ".join(identifier(column) for column, _ in TABLE_COLUMNS[table])
+    with cursor.connection.cursor(name="olist_reconcile_target") as target_cursor:
+        target_cursor.execute(
+            f"""
+            SELECT {business_columns} FROM (
+                SELECT r.*, ROW_NUMBER() OVER (
+                    PARTITION BY {partitions}
+                    ORDER BY GREATEST(r.updated_at, b.repair_observed_at) DESC NULLS LAST,
+                             b.certified_at DESC NULLS LAST,
+                             r._batch_id DESC, r._row_hash DESC
+                ) AS _rank
+                FROM raw."{table}" AS r
+                JOIN audit.batch_registry AS b ON b.batch_id = r._batch_id
+                WHERE b.status = 'CERTIFIED' AND b.table_name = %s
+                  AND NOT EXISTS (
+                      SELECT 1 FROM audit.deleted_keys AS d
+                      WHERE d.source_table = b.table_name AND d.business_key = {key_sql(table, "r")}
+                  )
+            ) AS ranked
+            WHERE _rank = 1
+            """,
+            (table,),
+        )
+        return _hash_rows(target_cursor, table)
 
 
 def compare_states(source_rows, target_rows, checkpoint, mode, *, overlap_minutes=OVERLAP_MINUTES):
@@ -119,35 +131,26 @@ def compare_states(source_rows, target_rows, checkpoint, mode, *, overlap_minute
     if overlap_minutes < 0:
         raise ValueError("overlap_minutes must be non-negative")
     horizon = (as_utc(checkpoint) - timedelta(minutes=overlap_minutes)) if mode == "continuous" else None
-    eligible_source = {}
-    eligible_target = {}
     deferred_newer = set()
     deferred_target_only = set()
+    if horizon is not None:
+        deferred_newer = {
+            key for key, (_, updated) in source_rows.items()
+            if updated is None or as_utc(updated) > horizon
+        }
+        deferred_target_only = {
+            key for key, (_, updated) in target_rows.items()
+            if updated is None or as_utc(updated) > horizon
+        }
 
-    for key, (digest, updated) in source_rows.items():
-        if mode == "continuous" and (updated is None or as_utc(updated) > horizon):
-            deferred_newer.add(key)
-        else:
-            eligible_source[key] = digest
-
-    for key, (digest, updated) in target_rows.items():
-        if mode == "continuous" and (updated is None or as_utc(updated) > horizon):
-            deferred_target_only.add(key)
-        else:
-            eligible_target[key] = digest
-
-    # If either side has a newer state, do not classify the other side's old
-    # version as deleted/missing/changed until both become eligible.
+    # Defer the key on both sides if either version is newer than the horizon.
     deferred = deferred_newer | deferred_target_only
-    compared_source = {k: v for k, v in eligible_source.items() if k not in deferred}
-    compared_target = {k: v for k, v in eligible_target.items() if k not in deferred}
-
-    missing = sorted(compared_source.keys() - compared_target.keys())
+    missing = sorted(source_rows.keys() - target_rows.keys() - deferred)
     changed = sorted(
-        k for k in compared_source.keys() & compared_target.keys()
-        if compared_source[k] != compared_target[k]
+        key for key in (source_rows.keys() & target_rows.keys()) - deferred
+        if source_rows[key][0] != target_rows[key][0]
     )
-    deleted = sorted(compared_target.keys() - compared_source.keys())
+    deleted = sorted(target_rows.keys() - source_rows.keys() - deferred)
 
     # Keep historical output key for audit consumers, despite its broader
     # meaning (any target state newer than the horizon).
@@ -157,10 +160,54 @@ def compare_states(source_rows, target_rows, checkpoint, mode, *, overlap_minute
         "deleted": deleted,
         "deferred_newer": sorted(deferred_newer),
         "deferred_target_only": sorted(deferred_target_only),
-        "eligible_count": len(compared_source),
+        "eligible_count": len(source_rows) - len(source_rows.keys() & deferred),
         "source_count": len(source_rows),
         "target_count": len(target_rows),
         "horizon": horizon,
+    }
+
+
+def certified_checkpoint(cursor, table):
+    cursor.execute(
+        "SELECT certified_high_watermark FROM audit.certified_watermarks WHERE table_name = %s",
+        (table,),
+    )
+    row = cursor.fetchone()
+    if row is None or row[0] is None:
+        raise RuntimeError(f"{table}: no certified watermark")
+    return row[0]
+
+
+def record_comparison(cursor, table, checkpoint, mode, result, *, remaining=None, **extra):
+    """Store before/after counts; sampled keys keep audit rows bounded."""
+    mismatches = sum(len(result[name]) for name in ("missing", "changed", "deleted"))
+    current = result if remaining is None else remaining
+    unrepaired = sum(len(current[name]) for name in ("missing", "changed", "deleted"))
+    deferred = len(set(current["deferred_newer"]) | set(current["deferred_target_only"]))
+    status = "MISMATCH" if unrepaired else ("DEFERRED" if deferred else "MATCH")
+    details = {
+        "mode": mode,
+        "checkpoint": as_utc(checkpoint).isoformat(),
+        "horizon": result["horizon"].isoformat() if result["horizon"] else None,
+        "eligible_source_count": result["eligible_count"],
+        "deferred_count": deferred,
+        **extra,
+    }
+    for name in ("missing", "deleted", "changed", "deferred_newer", "deferred_target_only"):
+        details[name] = result[name][:100]
+        details[f"{name}_count"] = len(result[name])
+    cursor.execute(
+        """INSERT INTO audit.reconciliation
+            (table_name, source_row_count, target_row_count, mismatch_count,
+             unrepaired_count, status, details)
+        VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)""",
+        (table, result["source_count"], result["target_count"],
+         mismatches, unrepaired, status, json.dumps(details)),
+    )
+    return {
+        "table": table, "mode": mode,
+        "matched": current["eligible_count"] - len(current["missing"]) - len(current["changed"]),
+        "deferred": deferred, "status": status, **extra,
     }
 
 
@@ -175,54 +222,22 @@ def compare_table(table, mode="continuous"):
     with closing(PostgresHook(postgres_conn_id=RECONCILE_CONN_ID).get_conn()) as conn:
         try:
             with conn.cursor() as cursor:
-                cursor.execute(
-                    "SELECT certified_high_watermark FROM audit.certified_watermarks WHERE table_name = %s",
-                    (table,),
-                )
-                checkpoint_row = cursor.fetchone()
-                checkpoint = checkpoint_row[0] if checkpoint_row else None
-                if checkpoint is None:
-                    raise RuntimeError(f"{table}: no certified watermark")
+                checkpoint = certified_checkpoint(cursor, table)
                 if mode == "full" and latest is not None and as_utc(latest) > as_utc(checkpoint):
                     raise RuntimeError(
                         f"{table}: full reconciliation requires source writes paused "
                         "and ingestion caught up to the source snapshot"
                     )
-                target_rows = _certified_state(cursor, table)
-                result = compare_states(source_rows, target_rows, checkpoint, mode)
-                mismatches = sum(len(result[k]) for k in ("missing", "changed", "deleted"))
-                deferred = len(set(result["deferred_newer"]) | set(result["deferred_target_only"]))
-                status = "MISMATCH" if mismatches else ("DEFERRED" if deferred else "MATCH")
-                details = {
-                    "mode": mode,
-                    "checkpoint": as_utc(checkpoint).isoformat(),
-                    "horizon": result["horizon"].isoformat() if result["horizon"] else None,
-                    "eligible_source_count": result["eligible_count"],
-                    "deferred_count": deferred,
-                }
-                for name in ("missing", "deleted", "changed", "deferred_newer", "deferred_target_only"):
-                    details[name] = result[name][:100]
-                    details[f"{name}_count"] = len(result[name])
-                cursor.execute(
-                    """INSERT INTO audit.reconciliation
-                        (table_name, source_row_count, target_row_count,
-                         mismatch_count, unrepaired_count, status, details)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)""",
-                    (table, result["source_count"], result["target_count"],
-                     mismatches, mismatches, status, json.dumps(details)),
-                )
+                result = compare_states(source_rows, _certified_state(cursor, table), checkpoint, mode)
+                summary = record_comparison(cursor, table, checkpoint, mode, result)
             conn.commit()
         except Exception:
             conn.rollback()
             raise
 
-    if mismatches:
+    if summary["status"] == "MISMATCH":
         raise ReconciliationMismatch(
             f"{table}: missing={len(result['missing'])}, changed={len(result['changed'])}, "
-            f"deleted={len(result['deleted'])}; deferred={deferred}; no automatic repair"
+            f"deleted={len(result['deleted'])}; deferred={summary['deferred']}"
         )
-    return {
-        "table": table, "mode": mode,
-        "matched": result["eligible_count"] - len(result["missing"]) - len(result["changed"]),
-        "deferred": deferred, "status": status,
-    }
+    return summary

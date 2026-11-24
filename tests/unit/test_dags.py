@@ -60,7 +60,7 @@ def test_reconcile_preserves_dependency_and_batch_queue():
     assert 'wait_for_ingest >> tables' in text
     assert 'compare.expand(table=tables)' in text
     assert 'queue="batch"' in text
-    assert 'mode="continuous"' in text
+    assert "return repair_table(table)" in text
 
 
 def test_reconcile_mismatch_is_nonretryable_and_other_errors_retry():

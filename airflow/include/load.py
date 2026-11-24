@@ -177,12 +177,12 @@ def _copy_raw(cursor, table, columns, copy_path):
                     copy.write(block)
 
 
-def _certify(cursor, table, batch_id, manifest, interval_end):
+def _certify(cursor, table, batch_id, manifest, interval_end, *, repair_observed_at=None):
     """Advance certification in the exact same transaction as COPY + Gate 2."""
     cursor.execute(
         """UPDATE audit.batch_registry SET status = 'CERTIFIED',
               actual_rows = %s, actual_control_totals = %s::jsonb,
-              updated_at = NOW(), certified_at = NOW(), reason = NULL
+              updated_at = NOW(), certified_at = clock_timestamp(), reason = NULL
            WHERE batch_id = %s""",
         (manifest["row_count"], json.dumps(manifest["control_totals"]), batch_id),
     )
@@ -199,6 +199,12 @@ def _certify(cursor, table, batch_id, manifest, interval_end):
                checked_at = CURRENT_TIMESTAMP""",
         (batch_id, table),
     )
+    if repair_observed_at is not None:
+        cursor.execute(
+            "UPDATE audit.batch_registry SET repair_observed_at = %s WHERE batch_id = %s",
+            (repair_observed_at, batch_id),
+        )
+        return
     cursor.execute(
         """INSERT INTO audit.certified_watermarks
               (table_name, certified_high_watermark, last_certified_batch_id)
