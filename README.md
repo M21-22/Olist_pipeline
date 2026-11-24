@@ -2,7 +2,7 @@
 
 A containerized data engineering platform based on the [Olist Brazilian E-Commerce dataset](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce). The project is designed as an end-to-end **micro-batch ELT platform**, progressing from simulated operational data through auditable ingestion, validation, warehousing, analytics, serving, and observability.
 
-> **Project status:** Ingestion, dbt transformations, and warehouse quality gates have been validated locally. Reconciliation repairs eligible source-to-raw differences, and Soda checks update serving status. The serving API and monitoring are planned.
+> **Project status:** Phase 7 passed local acceptance. Gate 3 validates staging, Gate 4 records the warehouse serving decision, and daily reconciliation repairs eligible differences between the source and certified raw data.
 
 ## Architecture
 
@@ -85,7 +85,7 @@ See [the implementation roadmap](plan.md) for target acceptance criteria.
 | Gate 1, Gate 2, transactional raw loading and certification | Implemented; unit and PostgreSQL integration checks passed |
 | dbt staging and Gate 3 staging validation | Implemented and locally tested; batch DAG succeeded; broader release checks remain |
 | dbt dimensional marts | **Local acceptance passed:** dimensional/fact/analytics models, API views, purchase-observed customer history, Python and dbt tests, dbt docs |
-| Gate 4, broader quality checks, reconciliation repair | D08–D21 acceptance suite, reconciliation repair, and per-series Soda calibration |
+| Phase 7 — Gates 3–4 and reconciliation | **Local acceptance passed.** D08–D21 warehouse quality suite, reconciliation repair and dbt/Soda publication workflow |
 | Defect injection and detection evaluation | Defect ground truth exists; comprehensive evaluation pending |
 | Serving API | Planned |
 | Metrics, monitoring, dashboards and alerts | Planned |
@@ -138,7 +138,7 @@ Reconciliation repairs hard deletes and silent updates against certified raw whe
 
 ### dbt marts and API views
 
-The manual `transform_marts` DAG runs Gate 3 before it builds and validates dimensions, facts, analytical marts and API views. It then runs the Gate 4 Soda scan. Generic and singular data tests execute during `dbt build`. Fixture-based dbt unit tests run separately. The customer SCD2 timeline is built from purchase observations in staging.
+The `transform_marts` DAG runs Gate 3 before it builds and validates dimensions, facts, analytical marts and API views. It can run manually or use the optional `OLIST_TRANSFORM_MARTS_SCHEDULE` cron. It then runs the Gate 4 Soda scan. Generic and singular data tests execute during `dbt build`. Fixture-based dbt unit tests run separately. The customer SCD2 timeline is built from purchase observations in staging.
 
 - **Five dimensions:** `dim_customer` (purchase-observed SCD2), `dim_product` and `dim_seller` (Type 1), `dim_geography` (ZIP-prefix representative location), and `dim_date` (calendar).
 - **Four incremental facts:** `fct_orders`, `fct_order_items`, `fct_payments`, and `fct_reviews`. The customer key is resolved at the parent order's purchase timestamp; late purchase observations can change historical customer ranges and cause fact re-keying.
@@ -187,11 +187,12 @@ After the services are started, use the Airflow UI to trigger `transform_staging
 
 ### Run marts and API transformations
 
-Run ingestion first so the seven mutable tables have certified checkpoints. Rebuild the Airflow image and recreate its services with `docker compose --env-file .env -f infra/compose.yaml up -d --build` so the batch worker picks up the Soda runtime and `SODA_READER_PASSWORD`. Run reconciliation successfully for all seven mutable tables, then trigger `transform_marts` in Airflow. The daily `reconcile` run waits for the corresponding `ingest` run. For a manual reconciliation, use a logical date five minutes after a successful ingestion run’s logical date.
+Run `ingest` first so the seven mutable tables have certified checkpoints. The batch worker needs the Soda runtime and `SODA_READER_PASSWORD`. Obtain a successful `reconcile` run for all seven mutable tables, then trigger `transform_marts`. For a manual reconciliation, set its logical date to a successful ingestion run’s logical date plus the `execution_delta` in [the reconciliation DAG](airflow/dags/reconcile.py).
 
-The SQL files in `infra/postgres/warehouse-init/` define the schema, drift
-functions, and grants for a fresh PostgreSQL data directory. Keep the existing
-warehouse volume if it already has these definitions.
+The SQL in `infra/postgres/warehouse-init/` defines the schema, drift functions,
+and grants for a fresh warehouse. Keep an existing warehouse that already has
+these definitions. `make warehouse-rebuild` is a reset for a disposable local
+warehouse. It drops and recreates the warehouse database before applying the SQL.
 
 | Condition | Serving state |
 |---|---|
@@ -253,6 +254,7 @@ make test-unit         # Unit tests
 make test-integration  # PostgreSQL integration tests
 make test-clean        # Remove disposable test services and volumes
 make test-warehouse-quality  # Run the D08–D21 suite in a disposable project
+make test-d12          # Run only the silent-update scenario
 ```
 
 `make test-warehouse-quality` reports a representative case for each D08–D21 defect ID and handles fixture setup and cleanup. The volume and distribution cases use synthetic history to verify Soda's decisions, including the effect of a fitted floor. D20 checks the SQL API view, while HTTP response contracts will be tested with the serving API.
@@ -273,7 +275,7 @@ docker compose --env-file .env -f infra/compose.yaml exec -T airflow-worker-batc
 '
 ```
 
-The generated `index.html`, `manifest.json` and `catalog.json` reside in the container's `/tmp/olist-dbt-target`; they can be copied to WSL with `docker cp`. These are generated artifacts, not required source files to commit.
+The generated `index.html`, `manifest.json` and `catalog.json` reside in the container's `/tmp/olist-dbt-target`.
 
 ## Repository structure
 
@@ -293,9 +295,8 @@ The generated `index.html`, `manifest.json` and `catalog.json` reside in the con
 
 ## Next milestones
 
-1. Capture and apply Soda calibration for the target warehouse using a clean Olist replay.
-2. Verify per-table failure isolation under a deliberately injected fault and the full defect-detection matrix.
-3. Confirm the regression workflow passes in GitHub Actions from a clean checkout.
-4. Build the serving API, observability, security/backup validation, and final runbooks.
+1. Extend fault injection and measure detection coverage across the full defect catalog.
+2. Confirm the regression workflow passes in GitHub Actions from a clean checkout.
+3. Build the serving API, observability, security and backup validation, and final runbooks.
 
 See [`plan.md`](plan.md) for the full target architecture and phase acceptance criteria, and `docs/` for technical implementation decisions.
